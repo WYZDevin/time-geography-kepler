@@ -38,9 +38,10 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
       longitude: '',
       time: '',
       // altitude: '',
-      visualizeActivitySpace: false,
-      activitySpaceField: '',
-      activitySpaceValues: [],
+      visualizeStay: false,
+      stayField: '',
+      stayValues: [],
+      visualizeSTKDE: false,
     },
   });
 
@@ -55,9 +56,10 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
       longitude: longitude || '',
       time: time || '',
       // altitude: altitude || '',
-      visualizeActivitySpace: false,
-      activitySpaceField: '',
-      activitySpaceValues: [],
+      visualizeStay: false,
+      stayField: '',
+      stayValues: [],
+      visualizeSTKDE: false,
     });
   }, [fields, reset]);
 
@@ -187,26 +189,28 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
               id="visualizeActivitySpace"
               className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               onChange={(e) => {
-                form.setValue('visualizeActivitySpace', e.target.checked);
+                form.setValue('visualizeStay', e.target.checked);
               }}
             />
-            <label htmlFor="visualizeActivitySpace" className="text-sm font-medium">
-              Visualize Activity Space
+            <label htmlFor="visualizeStay" className="text-sm font-medium">
+              Visualize Stay Area
             </label>
           </div>
 
-          {form.watch('visualizeActivitySpace') && (
+
+
+          {form.watch('visualizeStay') && (
             <>
               <FormField
                 control={control}
-                name="activitySpaceField"
+                name="stayField"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Activity Space Field</FormLabel>
+                    <FormLabel>Stay Field</FormLabel>
                     <FormControl>
                       <Select value={field.value} onValueChange={field.onChange}>
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select field to distinguish activity spaces" />
+                          <SelectValue placeholder="Select field to distinguish stay areas" />
                         </SelectTrigger>
                         <SelectContent>
                           {fields.map((option: Field) => (
@@ -223,16 +227,16 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
 
               <FormField
                 control={control}
-                name="activitySpaceValues"
+                name="stayValues"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Activity Space Values</FormLabel>
+                    <FormLabel>Stay Values</FormLabel>
                     <FormControl>
                       <Controller
-                        name="activitySpaceValues"
+                        name="stayValues"
                         control={control}
                         render={({ field }) => {
-                          const selectedField = form.watch('activitySpaceField');
+                          const selectedField = form.watch('stayField');
                           const uniqueValues = getUniqueValuesFromGeoJSON(rawGeoData, selectedField || '');
                           const uniqueValuesOptions: Option[] = uniqueValues.map(value => ({
                             value: String(value),
@@ -246,7 +250,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
                             <MultipleSelector
                               {...field}
                               options={uniqueValuesOptions}
-                              placeholder="Select values that represent activity spaces"
+                              placeholder="Select values that represent stay areas"
                               emptyIndicator={
                                 <p className="text-center text-sm text-muted-foreground">
                                   No values found.
@@ -262,6 +266,20 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
               />
             </>
           )}
+
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="visualizeSTKDE"
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              onChange={(e) => {
+                form.setValue('visualizeSTKDE', e.target.checked);
+              }}
+            />
+            <label htmlFor="visualizeSTKDE" className="text-sm font-medium">
+              Visualize STKDE
+            </label>
+          </div>
         </div>
         <Button type="submit" className="w-full bg-blue-500 text-white">Confirm</Button>
       </form>

@@ -9,7 +9,7 @@ import { PROCESSED_ALTITUDE_FIELD } from "../utils/constants";
 import { preprocessGeojsonData } from "@/data-processors/data-preprocessing";
 import { Field } from "@kepler.gl/types";
 import { createRawConvexHullGeojson } from "./convex-hull";
-import { createActivitySpace } from "./activity-space";
+import { createStayArea } from "./activity-space";
 import { createSTKDE, STKDEResult } from "./stkde";
 
 /** 
@@ -77,16 +77,18 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
     // create convex hull data
     const convexHullData = createRawConvexHullGeojson(preprocessedData);
 
-    let activitySpaceData: FeatureCollection | null = null;
-    if (fileFormValues.visualizeActivitySpace) {
-        const activitySpaceValues = fileFormValues.activitySpaceValues?.map((obj: any) => obj.value);
-        activitySpaceData = createActivitySpace(preprocessedData, activitySpaceValues!, fileFormValues.activitySpaceField!);
+    let stayData: FeatureCollection | null = null;
+    if (fileFormValues.visualizeStay) {
+        const stayValues = fileFormValues.stayValues?.map((obj: any) => obj.value);
+        stayData = createStayArea(preprocessedData, stayValues!, fileFormValues.stayField!);
     }
 
-    const stkdeData = await createSTKDE(preprocessedData, fileFormValues.time!);
-    
+    let stkdeData: any[] | null = null;
+    if (fileFormValues.visualizeSTKDE) {
+        stkdeData = await createSTKDE(preprocessedData, fileFormValues.time!);
+    }
     const customConfigConvexHull = createCustomConfigAquarim('my-convex-hull', true, "Space Time Aquarium");
-    const customActivitySpace = createCustomConfigActivitySpace('my-activity-space', false, "Activity Space");
+    const customStayArea = createCustomConfigActivitySpace('my-stay-area', false, "Stay Area");
     const customConfigLine = createCustomLineLayer(fileFormValues.latitude, fileFormValues.longitude);
 
     const customConfigSTKDE99 = createCustomConfigSTKDE('my-stkde-class3', false, "STKDE 99", 99, 1);
@@ -97,11 +99,11 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
     // post process to load data into kepler
     const processedLineData = processGeojson(preprocessedData);
     const processedConvexHullData = processGeojson(convexHullData);
-    const processedSTKDEDatas = stkdeData.map((data) => processGeojson(data as FeatureCollection));
+    const processedSTKDEDatas = stkdeData ? stkdeData.map((data) => processGeojson(data as FeatureCollection)) : [];
 
-    let processedActivitySpaceData = null;
-    if (activitySpaceData) {
-        processedActivitySpaceData = processGeojson(activitySpaceData);
+    let processedStayData = null;
+    if (stayData) {
+        processedStayData = processGeojson(stayData);
     }
 
     // add points data to kepler
@@ -120,39 +122,26 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
             },
             data: processedConvexHullData as any
         },
-        {
+        ...(processedSTKDEDatas.length > 0 ? processedSTKDEDatas.map((data, index) => ({
             info: {
-                id: 'my-stkde-class1',
-                label: 'stkde class 1',
+                id: `my-stkde-class${index + 1}`,
+                label: `stkde class ${index + 1}`,
             },
-            data: processedSTKDEDatas[0] as any
-        },
-        {
+            data: processedSTKDEDatas[index] as any
+        })) : []),
+        
+        ...(stayData ? [{
             info: {
-                id: 'my-stkde-class2',
-                label: 'stkde class 2',
+                id: 'my-stay-area',
+                label: 'stay area',
             },
-            data: processedSTKDEDatas[1] as any
-        },
-        {
-            info: {
-                id: 'my-stkde-class3',
-                label: 'stkde class 3',
-            },
-            data: processedSTKDEDatas[2] as any
-        },
-        ...(activitySpaceData ? [{
-            info: {
-                id: 'my-activity-space',
-                label: 'activitySpace',
-            },
-            data: processedActivitySpaceData as any
+            data: processedStayData as any
         }] : [])],
         options: { centerMap: true, readOnly: false },
         config: {
             visState: {
                 layers: [
-                    customActivitySpace as any,
+                    customStayArea as any,
                     customConfigLine as any,
                     customConfigConvexHull as any,
                     customConfigSTKDE99 as any,

@@ -487,6 +487,7 @@ export function createClassificationGeoJSON(
 
   // Create all_Z: for each time slice, use a constant value based on the time slice index.
   // In Python, they used: np.full_like(X.flatten(), i) * cell_size_meters * 0.95 for i in range(1, len(time_values)+1)
+
   let all_Z: number[] = [];
   for (let t = 0; t < n_time_slices; t++) {
     const zVal = (t + 1) * cell_size_meters * 0.95;

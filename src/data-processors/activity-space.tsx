@@ -8,7 +8,7 @@ interface ActivitySpaceSegment {
     features: GeoJSONFeature[];
 }
 
-const getActivitySpaceSegments = (data: FeatureCollection, activitySpaceValues: string [], activitySpaceField: string) => {
+const getStaySegments = (data: FeatureCollection, activitySpaceValues: string [], activitySpaceField: string) => {
 
     const activitySpaceSegments: ActivitySpaceSegment[] = [];
     let currentSegment: GeoJSONFeature[] = [];
@@ -54,9 +54,9 @@ const mergeConvexHulls = (convexHulls: FeatureCollection[]) => {
     });
 }
 
-const createActivitySpace = (data: FeatureCollection, activitySpaceValues: string [], activitySpaceField: string) => {
+const createStayArea = (data: FeatureCollection, activitySpaceValues: string [], activitySpaceField: string) => {
 
-    const activitySpaceSegments: ActivitySpaceSegment[] = getActivitySpaceSegments(data, activitySpaceValues, activitySpaceField);
+    const activitySpaceSegments: ActivitySpaceSegment[] = getStaySegments(data, activitySpaceValues, activitySpaceField);
 
     // create convex hull for each segment
     const activitySpaceConvexHulls: FeatureCollection[] = activitySpaceSegments.map((segment) => {
@@ -75,4 +75,4 @@ const createActivitySpace = (data: FeatureCollection, activitySpaceValues: strin
     return mergedConvexHulls;
 }
 
-export { createActivitySpace };
+export { createStayArea };

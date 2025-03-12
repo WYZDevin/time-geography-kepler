@@ -28,9 +28,10 @@ export const fileFormSchema = z.object({
     time: z.string().nonempty('Time is required'),
     // altitude is optional; uncomment if needed
     // altitude: z.string().optional(),
-    visualizeActivitySpace: z.boolean().optional(),
-    activitySpaceField: z.string().optional(),
-    activitySpaceValues: z.array(z.any()).optional(),
+    visualizeStay: z.boolean().optional(),
+    stayField: z.string().optional(),
+    stayValues: z.array(z.any()).optional(),
+    visualizeSTKDE: z.boolean().optional(),
 });
 
 interface FileFormValues extends z.infer<typeof fileFormSchema> {}
