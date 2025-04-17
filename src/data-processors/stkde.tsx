@@ -174,7 +174,7 @@ export async function tf_stkde(
     const spatial_kernel_all = tf.mul(const_spatial, tf.pow(tf.sub(one, spatial_u), 2));
     const spatial_kernel = tf.where(spatial_mask, spatial_kernel_all, tf.zerosLike(spatial_kernel_all));
 
-    // Multiply each point’s spatial kernel by its temporal weight and sum over points.
+    // Multiply each point's spatial kernel by its temporal weight and sum over points.
     const t_weight_exp = t_weight.reshape([n, 1, 1]);
     const contribution = tf.mul(t_weight_exp, spatial_kernel);
     const density_slice = contribution.sum(0); // [n_rows, n_cols]
@@ -551,9 +551,92 @@ export function createClassificationGeoJSON(
   return featureCollections;
 }
 
+/**
+ * Creates GeoJSON features for coordinate axes visualization
+ * @param bbox - Bounding box [minX, minY, maxX, maxY]
+ * @param maxHeight - Maximum height for the z-axis
+ * @returns GeoJSON FeatureCollection with axis lines and labels
+ */
+function createAxisVisualization(
+  bbox: number[],
+  maxHeight: number
+): GeoJSON.FeatureCollection {
+  const [minX, minY, maxX, maxY] = bbox;
+  const padding = 0.01 * Math.max(maxX - minX, maxY - minY); // 1% padding
 
+  // Create axis lines
+  const features: GeoJSON.Feature[] = [
+    // X-axis (Longitude)
+    {
+      type: "Feature",
+      properties: { type: "axis", label: "Longitude" },
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [minX - padding, minY - padding, 0],
+          [maxX + padding, minY - padding, 0]
+        ]
+      }
+    },
+    // Y-axis (Latitude)
+    {
+      type: "Feature",
+      properties: { type: "axis", label: "Latitude" },
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [minX - padding, minY - padding, 0],
+          [minX - padding, maxY + padding, 0]
+        ]
+      }
+    },
+    // Z-axis (Height)
+    {
+      type: "Feature",
+      properties: { type: "axis", label: "Height" },
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [minX - padding, minY - padding, 0],
+          [minX - padding, minY - padding, maxHeight]
+        ]
+      }
+    }
+  ];
 
-/* --- createSTKDE: Connecting STKDE and Classification --- */
+  // Add axis labels as Point features
+  const labelFeatures: GeoJSON.Feature[] = [
+    {
+      type: "Feature",
+      properties: { type: "label", text: "Longitude" },
+      geometry: {
+        type: "Point",
+        coordinates: [maxX + padding * 2, minY - padding, 0]
+      }
+    },
+    {
+      type: "Feature",
+      properties: { type: "label", text: "Latitude" },
+      geometry: {
+        type: "Point",
+        coordinates: [minX - padding, maxY + padding * 2, 0]
+      }
+    },
+    {
+      type: "Feature",
+      properties: { type: "label", text: "Height" },
+      geometry: {
+        type: "Point",
+        coordinates: [minX - padding, minY - padding, maxHeight + padding * 100]
+      }
+    }
+  ];
+
+  return {
+    type: "FeatureCollection",
+    features: [...features, ...labelFeatures]
+  };
+}
 
 /**
  * createSTKDE
@@ -570,7 +653,10 @@ export async function createSTKDE(
   temporal_bandwidth?: number,
   cell_size?: number,
   n_time_slices: number = 20
-): Promise<FeatureCollection[]> {
+): Promise<{
+  densityFeatures: GeoJSON.FeatureCollection[],
+  axisFeatures: GeoJSON.FeatureCollection
+}> {
   // 1. Compute the STKDE result.
   const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
 
@@ -597,14 +683,24 @@ export async function createSTKDE(
   );
 
   // 4. Create the GeoJSON FeatureCollection.
-  const geojsons: FeatureCollection[] = createClassificationGeoJSON(
+  const densityFeatures = createClassificationGeoJSON(
     classificationResults.X,
     classificationResults.Y,
     classificationResults.classificationSlicesArrays,
     stkdeResult.cell_size
   );
 
-  return geojsons;
+  // Calculate the maximum height used in the visualization
+  const maxHeight = n_time_slices * stkdeResult.cell_size * 111320 * 0.95;
+  
+  // Create axis visualization
+  const bbox = turf.bbox(gdf);
+  const axisFeatures = createAxisVisualization(bbox, maxHeight);
+
+  return {
+    densityFeatures,
+    axisFeatures
+  };
 }
 
 /**

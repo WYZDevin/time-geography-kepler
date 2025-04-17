@@ -9,7 +9,7 @@ import FileUploader from './file-uploader';
 import { Button } from '@/components/ui/button';
 
 
-export const MainPanel = () => {
+export const ControlPanel = () => {
     const [processedGeoData, setProcessedGeoData] = useState(null);
     const [rawGeoData, setRawGeoData] = useState<FeatureCollection | null>(null);
     const [fields, setFields] = useState<Field[]>([]);
@@ -39,7 +39,9 @@ export const MainPanel = () => {
             ) : (
                 <FileUploader onFileLoaded={handleFileLoaded} />
             )}
-            <Button onClick={resetMainPanel}>Reset Input</Button>
+            {isFileSelected && (
+                <Button onClick={resetMainPanel}>Reset Input</Button>
+            )}
         </div>
     )
 }

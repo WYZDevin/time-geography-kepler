@@ -1,18 +1,23 @@
-
+import { useEffect } from 'react';
 import KeplerGl from '@kepler.gl/components';
-import { MainPanel } from './components/main-panel/main-panel';
-
-
-
+import { ControlPanel } from './components/main-panel/control-panel';
+import ProgressDialog from './components/custom-components/progress-bar';
+import { progressService } from './components/custom-components/progress-bar';
 
 const App = () => {
   // State to hold the processed data and the extracted fields
 
-
-
-  const keplerWidth = window.innerWidth * 0.65;
+  const keplerWidth = window.innerWidth * 0.7;
   const keplerHeight = window.innerHeight;
   // Callback when file is loaded and processed 
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      // Clean up any pending progress operations
+      progressService.reset();
+    };
+  }, []);
 
   const white = '#ffffff';
   const customTheme = {
@@ -26,13 +31,14 @@ const App = () => {
   return (
     <>
       <div className="grid grid-cols-[70%_30%] h-screen w-full overflow-hidden">
+        <ProgressDialog />
         {/* Left side: Kepler.gl container using 70% of the width */}
         <div className="relative h-full">
           <KeplerGl
             width={keplerWidth}
             height={keplerHeight}
             id="kepler"
-            mapboxApiAccessToken=""
+            mapboxApiAccessToken="pk.eyJ1IjoiZGV2aW53eXoiLCJhIjoiY203bGFrbG0wMDZqMDJrb2t6aDk0aXd0ZSJ9.HB2is1fGpx-n1fM05YzDLg"
             theme="light"
             mapStyle={{
               styleType: 'light',
@@ -60,7 +66,7 @@ const App = () => {
 
         {/* Right side: File uploader with a background */}
         <div className="bg-grey p-4 h-full overflow-auto">
-          <MainPanel />
+          <ControlPanel />
         </div>
       </div>
 

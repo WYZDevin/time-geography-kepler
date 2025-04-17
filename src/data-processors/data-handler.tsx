@@ -1,4 +1,4 @@
-import store from "../store";
+import store from "@/stores/store";
 import { addDataToMap } from '@kepler.gl/actions';
 
 import { processGeojson } from '@kepler.gl/processors';
@@ -7,10 +7,11 @@ import { ColumnMapping, FeatureCollection, FileFormValues } from "@/interfaces/d
 import { createCustomConfigActivitySpace, createCustomConfigAquarim, createCustomConfigPoints, createCustomConfigSTKDE, createCustomLineLayer } from "../utils/config";
 import { PROCESSED_ALTITUDE_FIELD } from "../utils/constants";
 import { preprocessGeojsonData } from "@/data-processors/data-preprocessing";
-import { Field } from "@kepler.gl/types";
+import { Field, ProcessorResult } from "@kepler.gl/types";
 import { createRawConvexHullGeojson } from "./convex-hull";
 import { createStayArea } from "./activity-space";
 import { createSTKDE, STKDEResult } from "./stkde";
+import { progressService } from "@/components/custom-components/progress-bar";
 
 /** 
  * Finds the coordinate and time columns in the feature names
@@ -69,24 +70,67 @@ const getZoom = (data: FeatureCollection) => {
 }
 
 
-const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: FileFormValues) => {
+const addDataToKeplerWithTime = async (
+    data: FeatureCollection, 
+    fileFormValues: FileFormValues
+) => {
+    let processedSTKDEDatas: ProcessorResult[] = [];
+    let processedAxisData: ProcessorResult | null = null;
+    let processedTrajectoryData: ProcessorResult | null = null;
+    let processedConvexHullData: ProcessorResult | null = null;
+    let processedStayData: ProcessorResult | null = null;
 
     const zoom = getZoom(data);
-    const preprocessedData = preprocessGeojsonData(data);
-    
-    // create convex hull data
-    const convexHullData = createRawConvexHullGeojson(preprocessedData);
 
+    // Step 1: preprocess trajectory data
+    progressService.update("Preparing Data");
+    const preprocessedTrajectoryData = preprocessGeojsonData(data);
+    processedTrajectoryData = processGeojson(preprocessedTrajectoryData);
+
+    // Sleep for 1 second
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Step 2: create convex hull data
+    progressService.update("Creating Convex Hull");
+    const convexHullData = createRawConvexHullGeojson(preprocessedTrajectoryData);
+    processedConvexHullData = processGeojson(convexHullData);
+
+    // Sleep for 1 second
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // (Optional) Step 3: create stay area data
     let stayData: FeatureCollection | null = null;
     if (fileFormValues.visualizeStay) {
+        progressService.update("Creating Stay Area");
         const stayValues = fileFormValues.stayValues?.map((obj: any) => obj.value);
-        stayData = createStayArea(preprocessedData, stayValues!, fileFormValues.stayField!);
+        stayData = createStayArea(preprocessedTrajectoryData, stayValues!, fileFormValues.stayField!);
+        processedStayData = processGeojson(stayData);
+        // Sleep for 1 second
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+    }
+    
+
+    // (Optional) Step 4: create STKDE data
+    let stkdeData: {
+        densityFeatures: FeatureCollection[],
+        axisFeatures: FeatureCollection
+    } | null = null;
+    if (fileFormValues.visualizeSTKDE) {
+        progressService.update("Creating STKDE");
+        const stkdeResult = await createSTKDE(preprocessedTrajectoryData, fileFormValues.time!);
+        if (stkdeResult) {
+            stkdeData = {
+                densityFeatures: stkdeResult.densityFeatures as FeatureCollection[],
+                axisFeatures: stkdeResult.axisFeatures as FeatureCollection
+            };
+        }
+        processedSTKDEDatas = stkdeData?.densityFeatures ? stkdeData.densityFeatures.map((data) => processGeojson(data as FeatureCollection)) : [];
+        processedAxisData = stkdeData?.axisFeatures ? processGeojson(stkdeData.axisFeatures as FeatureCollection) : null;
+        
     }
 
-    let stkdeData: any[] | null = null;
-    if (fileFormValues.visualizeSTKDE) {
-        stkdeData = await createSTKDE(preprocessedData, fileFormValues.time!);
-    }
+    // Post process to load data into kepler
     const customConfigConvexHull = createCustomConfigAquarim('my-convex-hull', true, "Space Time Aquarium");
     const customStayArea = createCustomConfigActivitySpace('my-stay-area', false, "Stay Area");
     const customConfigLine = createCustomLineLayer(fileFormValues.latitude, fileFormValues.longitude);
@@ -95,17 +139,6 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
     const customConfigSTKDE95 = createCustomConfigSTKDE('my-stkde-class2', false, "STKDE 95", 95, 0.1);
     const customConfigSTKDE90 = createCustomConfigSTKDE('my-stkde-class1', false, "STKDE 90", 90, 0.01);
 
-    
-    // post process to load data into kepler
-    const processedLineData = processGeojson(preprocessedData);
-    const processedConvexHullData = processGeojson(convexHullData);
-    const processedSTKDEDatas = stkdeData ? stkdeData.map((data) => processGeojson(data as FeatureCollection)) : [];
-
-    let processedStayData = null;
-    if (stayData) {
-        processedStayData = processGeojson(stayData);
-    }
-
     // add points data to kepler
     store.dispatch(addDataToMap({
         datasets: [{
@@ -113,12 +146,12 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
                 id: 'myData',
                 label: 'myData',
             },
-            data: processedLineData as any
+            data: processedTrajectoryData as any
         },
         {
             info: {
                 id: 'my-convex-hull',
-                label: 'convexHull',
+                label: 'convexHll',
             },
             data: processedConvexHullData as any
         },
@@ -129,7 +162,13 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
             },
             data: processedSTKDEDatas[index] as any
         })) : []),
-        
+        ...(processedAxisData ? [{
+            info: {
+                id: 'my-stkde-axis',
+                label: 'STKDE Axis',
+            },
+            data: processedAxisData as any
+        }] : []),
         ...(stayData ? [{
             info: {
                 id: 'my-stay-area',
@@ -177,11 +216,7 @@ const addDataToKeplerWithTime = async (data: FeatureCollection, fileFormValues: 
         zoom: zoom - 3 // Subtract 1 to give some padding
     }));
 
-
-
-
-
-
+    console.log("Data added to Kepler");
 };
 
 export { addDataToKeplerWithTime, findCoordinateAndTimeColumns };

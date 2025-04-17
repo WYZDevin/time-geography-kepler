@@ -23,7 +23,9 @@ import { Field } from '@kepler.gl/types';
 import MultipleSelector, { Option } from '@/components/ui/multiple-selector';
 import { getUniqueValuesFromGeoJSON } from '@/data-processors/data-preprocessing';
 import { fileFormSchema, FileFormValues } from '@/interfaces/data-interfaces';
-
+import { useDispatch, useSelector } from 'react-redux';
+import { RootState } from '@/stores/store';
+import { progressService } from '@/components/custom-components/progress-bar';
 type FileFormProps = {
   rawGeoData: any;
   fields: Field[];
@@ -31,6 +33,7 @@ type FileFormProps = {
 
 
 const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
+  // Initialize form
   const form = useForm<FileFormValues>({
     resolver: zodResolver(fileFormSchema),
     defaultValues: {  
@@ -63,9 +66,20 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
     });
   }, [fields, reset]);
 
-  const onSubmit = (data: FileFormValues) => {
-    // Call your helper function with the raw geo data, form values, and fields
-    addDataToKeplerWithTime(rawGeoData, data);
+  const isProcessing = useSelector((state: RootState) => state.progress.isProcessing);
+  
+
+  const onSubmit = async (data: FileFormValues) => {
+    progressService.start(data);
+    try {
+      // Call your helper function with the raw geo data, form values, and fields
+      await addDataToKeplerWithTime(rawGeoData, data);
+    } catch (error) {
+      console.error('Error adding data to Kepler:', error);
+      progressService.update('Error adding data to Kepler');
+    } finally {
+      progressService.complete();
+    }
   };
 
 
@@ -99,6 +113,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
             </FormItem>
           )}
         />
+
         {/* Longitude Field */}
         <FormField
           control={control}
@@ -126,6 +141,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
             </FormItem>
           )}
         />
+
         {/* Time Field */}
         <FormField
           control={control}
@@ -281,7 +297,13 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
             </label>
           </div>
         </div>
-        <Button type="submit" className="w-full bg-blue-500 text-white">Confirm</Button>
+        
+        <Button type="submit" 
+        className="w-full bg-blue-500 text-white"
+        disabled={isProcessing}
+        >
+          {isProcessing ? 'Processing...' : 'Confirm'}
+        </Button>
       </form>
     </Form>
   );

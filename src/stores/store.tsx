@@ -3,8 +3,12 @@
 
 import {createStore, combineReducers, applyMiddleware, compose, Action} from 'redux';
 import keplerGlReducer, {enhanceReduxMiddleware} from '@kepler.gl/reducers';
-import { FeatureCollection } from './interfaces/data-interfaces';
+import { FeatureCollection } from '../interfaces/data-interfaces';
 import { Field } from '@kepler.gl/types';
+
+import { configureStore } from '@reduxjs/toolkit';
+import progressReducer from './progress-slice';
+
 
 const customKeplerGlReducer = keplerGlReducer.initialState({
   uiState: {
@@ -76,12 +80,29 @@ function dataReducer(state = initialDataState, action: DataActionTypes): DataSta
 const reducers = combineReducers({
   keplerGl: customKeplerGlReducer,
   data: dataReducer,
+  progress: progressReducer,
 });
 
 const middlewares = enhanceReduxMiddleware([]);
-const enhancers = [applyMiddleware(...middlewares)];
+// Configure Redux DevTools with max age to limit memory usage
+const devToolsOptions = {
+  maxAge: 50, // Limit history to 50 actions
+  trace: false, // Disable action tracing
+  traceLimit: 25 // Limit trace history if enabled
+};
 
-export default createStore(reducers, {}, compose(...enhancers) as any);
+const store = configureStore({
+  reducer: reducers,
+  preloadedState: {}, // equivalent to the empty object in createStore
+  middleware: () => middlewares, // directly use the middlewares from enhanceReduxMiddleware
+  // enhancers: [applyMiddleware(...middlewares)], // use compose directly as an enhancer
+  // devTools: devToolsOptions,
+});
+
+export default store;
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
 
 // Action creators for updating geojson and columns
 export const setGeojson = (geojson: FeatureCollection): SetGeojsonAction => ({
