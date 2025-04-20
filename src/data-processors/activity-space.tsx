@@ -1,5 +1,5 @@
 import { FeatureCollection, GeoJSONFeature } from "@/interfaces/data-interfaces";
-import { PROCESSED_ALTITUDE_FIELD } from "@/utils/constants";
+import { PROCESSED_TIME_FIELD } from "@/utils/constants";
 import { createRawConvexHullGeojson } from "./convex-hull";
 
 interface ActivitySpaceSegment {
@@ -24,11 +24,11 @@ const getStaySegments = (data: FeatureCollection, activitySpaceValues: string []
         if (isCurrentFeatureActivitySpace && !hasActiveActivitySpace) {
             currentSegment.push(feature);
             hasActiveActivitySpace = true;
-            startHeight = feature.properties[PROCESSED_ALTITUDE_FIELD];
+            startHeight = feature.properties[PROCESSED_TIME_FIELD];
         } else if (isCurrentFeatureActivitySpace && hasActiveActivitySpace) {
             currentSegment.push(feature);
         } else if (!isCurrentFeatureActivitySpace && hasActiveActivitySpace) {
-            endHeight = feature.properties[PROCESSED_ALTITUDE_FIELD];
+            endHeight = feature.properties[PROCESSED_TIME_FIELD];
             hasActiveActivitySpace = false;
             activitySpaceSegments.push({
                 startHeight,

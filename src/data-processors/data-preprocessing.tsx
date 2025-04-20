@@ -1,7 +1,10 @@
 import { ColumnMapping, FeatureCollection, GeoJSONFeature } from "@/interfaces/data-interfaces";
 import { findCoordinateAndTimeColumns } from "@/data-processors/data-handler";
 import * as turf from '@turf/turf';
-import { PROCESSED_ALTITUDE_FIELD, PROCESSED_NEIGHBORS_FIELD } from "@/utils/constants";
+import { point, distance } from '@turf/turf';
+import { PROCESSED_TIME_FIELD, PROCESSED_NEIGHBORS_FIELD } from "@/utils/constants";
+import { setHeightScale, setSideLength, setDataLength } from "@/stores/metadata-slice";
+import store from "@/stores/store";
 
 
 /**
@@ -24,7 +27,7 @@ function addOrderByTime(data: FeatureCollection, mapping: ColumnMapping): Featur
   // Use turf.featureEach to iterate over the sorted features and assign the "order" property.
   turf.featureEach({ type: "FeatureCollection", features: sortedFeatures }, (feature: GeoJSONFeature, index: number) => {
     // add the time order and neighbors to the feature for visualization
-    feature.properties[PROCESSED_ALTITUDE_FIELD] = index;
+    feature.properties[PROCESSED_TIME_FIELD] = index;
     feature.properties[PROCESSED_NEIGHBORS_FIELD] = [index - 1, index + 1];
 
     // add altitude to the geometry
@@ -38,6 +41,30 @@ function addOrderByTime(data: FeatureCollection, mapping: ColumnMapping): Featur
   };
 }
 
+function getBBoxSideLengths(bbox: number[]) {
+  const [minX, minY, maxX, maxY] = bbox;
+
+  // Define corners
+  const bottomLeft = point([minX, minY]);
+  const bottomRight = point([maxX, minY]);
+  const topLeft = point([minX, maxY]);
+  const topRight = point([maxX, maxY]);
+
+  // Compute distances in kilometers
+  const widthBottom = distance(bottomLeft, bottomRight, { units: 'meters' });
+  const widthTop = distance(topLeft, topRight, { units: 'meters' });
+  const heightLeft = distance(bottomLeft, topLeft, { units: 'meters' });
+  const heightRight = distance(bottomRight, topRight, { units: 'meters' });
+
+  return {
+    bottom: widthBottom,
+    top: widthTop,
+    left: heightLeft,
+    right: heightRight
+  };
+}
+
+
 const preprocessGeojsonData = (data: FeatureCollection): FeatureCollection => {
 
   // Get the feature names from the first feature
@@ -49,8 +76,30 @@ const preprocessGeojsonData = (data: FeatureCollection): FeatureCollection => {
   // Add the order by time column
   const processedData = addOrderByTime(data, columnMapping);
 
+  // Get the length of the data
+  const length = processedData.features.length;
+  store.dispatch(setDataLength(length));
+  
+  // Get bbox of the data
+  const bbox = turf.bbox(processedData);
 
-  return processedData;
+  const sideLengths = getBBoxSideLengths(bbox);
+  const sideLengthMeters = Math.max(sideLengths.left, sideLengths.right, sideLengths.top, sideLengths.bottom);
+  
+  // Max compacity should be 50000
+  // const sideLengthMeters = Math.min(sideLength, 7200);
+  // const sideLengthMeters = sideLength;
+  // console.log("sideLengthMeters", sideLengthMeters);
+  store.dispatch(setSideLength(sideLengthMeters));
+
+  // Get the scale of the data
+  const heightScale = sideLengthMeters / length;
+  store.dispatch(setHeightScale(heightScale));
+  // store.dispatch(setHeightScale(1));
+
+  console.log("heightScale", heightScale, 'Side Length', sideLengthMeters, 'Data Length', length);
+
+  return processedData
 }
 
 /**

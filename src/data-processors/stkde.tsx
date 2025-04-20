@@ -1,4 +1,6 @@
-import { PROCESSED_STKDE_HEIGHT_FIELD } from '@/utils/constants';
+import { selectSideLength } from '@/stores/metadata-slice';
+import store from '@/stores/store';
+import { PROCESSED_HEIGHT_FIELD } from '@/utils/constants';
 import * as tf from '@tensorflow/tfjs';
 import * as turf from '@turf/turf';
 
@@ -29,7 +31,7 @@ export async function tf_stkde(
   spatial_bandwidth?: number,
   temporal_bandwidth?: number,
   cell_size?: number,
-  n_time_slices: number = 20
+  n_time_slices: number = 10
 ): Promise<STKDEResult> {
   // --- Data Extraction ---
   const features = gdf.features;
@@ -107,6 +109,7 @@ export async function tf_stkde(
   if (cell_size === undefined) {
     const dx_extent = x_max - x_min;
     const dy_extent = y_max - y_min;
+    // 50 is the number of cells in the grid
     cell_size = Math.min(dx_extent, dy_extent) / 50;
     if (cell_size <= 0) cell_size = 1.0;
   }
@@ -292,7 +295,7 @@ function percentileTensor(t: tf.Tensor1D, p: number): tf.Tensor {
  */
 export async function classifyByQuantile(
   densitySlice: tf.Tensor2D,
-  levels: number[] = [0.9, 0.95, 0.99]
+  levels: number[] = [0.9, 0.975, 0.99]
 ): Promise<{ classification: tf.Tensor2D; thresholds: { [key: number]: number } }> {
   // Mask out zeros and get a 1D tensor of nonzero density values.
   const nonzeroMask = densitySlice.greater(tf.scalar(0));
@@ -306,13 +309,13 @@ export async function classifyByQuantile(
     threshTensor.dispose();
   }
   // // For debugging (prints out computed thresholds):
-  console.log(thresholds[0.9], thresholds[0.95], thresholds[0.99]);
+  console.log(thresholds[0.9], thresholds[0.975], thresholds[0.99]);
 
   // Begin with a tensor of zeros (category 0).
   let classification = tf.zerosLike(densitySlice);
 
   const q90 = tf.scalar(thresholds[0.9]);
-  const q95 = tf.scalar(thresholds[0.95]);
+  const q95 = tf.scalar(thresholds[0.975]);
   const q99 = tf.scalar(thresholds[0.99]);
 
   // Category 1: density > q90 and density < q95 → assign label 1.
@@ -406,7 +409,7 @@ export async function classifyKDE(
   for (let t = 0; t < n_time_slices; t++) {
     // Extract the density slice at time index t.
     const densitySlice = density3D.slice([t, 0, 0], [1, -1, -1]).squeeze([0]) as tf.Tensor2D;
-    const { classification, thresholds } = await classifyByQuantile(densitySlice, [0.9, 0.95, 0.99]);
+    const { classification, thresholds } = await classifyByQuantile(densitySlice, [0.9, 0.975, 0.99]);
     classificationSlices.push(classification);
     thresholdsAll.push(thresholds);
     densitySlice.dispose();
@@ -463,8 +466,10 @@ export function createClassificationGeoJSON(
   classificationSlices: number[][][],
   cell_size: number
 ): FeatureCollection[] {
-  const cell_size_meters = cell_size * 111320;
+  const sideLength = selectSideLength(store.getState());
   const n_time_slices = classificationSlices.length;
+  const cell_size_meters = sideLength / n_time_slices;
+
   const n_rows = X.length;
   const n_cols = X[0].length;
   const totalCells = n_rows * n_cols;
@@ -490,7 +495,7 @@ export function createClassificationGeoJSON(
 
   let all_Z: number[] = [];
   for (let t = 0; t < n_time_slices; t++) {
-    const zVal = (t + 1) * cell_size_meters * 0.95;
+    const zVal = (t) * cell_size_meters * 1;
     const zArray = new Array(totalCells).fill(zVal);
     all_Z = all_Z.concat(zArray);
   }
@@ -532,7 +537,7 @@ export function createClassificationGeoJSON(
         properties: {
           classification: flatClassification[i],
           z: z,
-          PROCESSED_STKDE_HEIGHT_FIELD: cell_size_meters * 0.95
+          PROCESSED_STKDE_HEIGHT_FIELD: cell_size_meters * 1
         }
       };
       featuresByClassification[flatClassification[i]].push(feature);
@@ -542,7 +547,7 @@ export function createClassificationGeoJSON(
   const featureCollections: FeatureCollection[] = [];
   for (let i = 1; i < 4; i++) {
     const collection: FeatureCollection = {
-      type: "FeatureCollection", 
+      type: "FeatureCollection",
       features: featuresByClassification[i]
     };
     featureCollections.push(collection);
@@ -551,92 +556,7 @@ export function createClassificationGeoJSON(
   return featureCollections;
 }
 
-/**
- * Creates GeoJSON features for coordinate axes visualization
- * @param bbox - Bounding box [minX, minY, maxX, maxY]
- * @param maxHeight - Maximum height for the z-axis
- * @returns GeoJSON FeatureCollection with axis lines and labels
- */
-function createAxisVisualization(
-  bbox: number[],
-  maxHeight: number
-): GeoJSON.FeatureCollection {
-  const [minX, minY, maxX, maxY] = bbox;
-  const padding = 0.01 * Math.max(maxX - minX, maxY - minY); // 1% padding
 
-  // Create axis lines
-  const features: GeoJSON.Feature[] = [
-    // X-axis (Longitude)
-    {
-      type: "Feature",
-      properties: { type: "axis", label: "Longitude" },
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [minX - padding, minY - padding, 0],
-          [maxX + padding, minY - padding, 0]
-        ]
-      }
-    },
-    // Y-axis (Latitude)
-    {
-      type: "Feature",
-      properties: { type: "axis", label: "Latitude" },
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [minX - padding, minY - padding, 0],
-          [minX - padding, maxY + padding, 0]
-        ]
-      }
-    },
-    // Z-axis (Height)
-    {
-      type: "Feature",
-      properties: { type: "axis", label: "Height" },
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [minX - padding, minY - padding, 0],
-          [minX - padding, minY - padding, maxHeight]
-        ]
-      }
-    }
-  ];
-
-  // Add axis labels as Point features
-  const labelFeatures: GeoJSON.Feature[] = [
-    {
-      type: "Feature",
-      properties: { type: "label", text: "Longitude" },
-      geometry: {
-        type: "Point",
-        coordinates: [maxX + padding * 2, minY - padding, 0]
-      }
-    },
-    {
-      type: "Feature",
-      properties: { type: "label", text: "Latitude" },
-      geometry: {
-        type: "Point",
-        coordinates: [minX - padding, maxY + padding * 2, 0]
-      }
-    },
-    {
-      type: "Feature",
-      properties: { type: "label", text: "Height" },
-      geometry: {
-        type: "Point",
-        coordinates: [minX - padding, minY - padding, maxHeight + padding * 100]
-      }
-    }
-  ];
-
-  return {
-    type: "FeatureCollection",
-    features: [...features, ...labelFeatures]
-  };
-}
 
 /**
  * createSTKDE
@@ -652,11 +572,8 @@ export async function createSTKDE(
   spatial_bandwidth?: number,
   temporal_bandwidth?: number,
   cell_size?: number,
-  n_time_slices: number = 20
-): Promise<{
-  densityFeatures: GeoJSON.FeatureCollection[],
-  axisFeatures: GeoJSON.FeatureCollection
-}> {
+  n_time_slices: number = 24
+): Promise<GeoJSON.FeatureCollection[]> {
   // 1. Compute the STKDE result.
   const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
 
@@ -690,19 +607,8 @@ export async function createSTKDE(
     stkdeResult.cell_size
   );
 
-  // Calculate the maximum height used in the visualization
-  const maxHeight = n_time_slices * stkdeResult.cell_size * 111320 * 0.95;
-  
-  // Create axis visualization
-  const bbox = turf.bbox(gdf);
-  const axisFeatures = createAxisVisualization(bbox, maxHeight);
-
-  return {
-    densityFeatures,
-    axisFeatures
-  };
+  return densityFeatures;
 }
-
 /**
  * Computes the standard deviation of a 1D tensor.
  * Returns a scalar tensor.

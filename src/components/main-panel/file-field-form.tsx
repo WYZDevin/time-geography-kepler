@@ -45,6 +45,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
       stayField: '',
       stayValues: [],
       visualizeSTKDE: false,
+      visualizeAxis: false,
     },
   });
 
@@ -63,6 +64,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
       stayField: '',
       stayValues: [],
       visualizeSTKDE: false,
+      visualizeAxis: false,
     });
   }, [fields, reset]);
 
@@ -294,6 +296,20 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
             />
             <label htmlFor="visualizeSTKDE" className="text-sm font-medium">
               Visualize STKDE
+            </label>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="visualizeAxis"
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              onChange={(e) => {
+                form.setValue('visualizeAxis', e.target.checked);
+              }}
+            />
+            <label htmlFor="visualizeAxis" className="text-sm font-medium">
+              Visualize Coordinate Axes
             </label>
           </div>
         </div>

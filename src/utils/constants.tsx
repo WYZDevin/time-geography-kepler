@@ -1,6 +1,6 @@
-export const PROCESSED_ALTITUDE_FIELD = '_time_order';
+export const PROCESSED_TIME_FIELD = '_time_order';
 export const PROCESSED_NEIGHBORS_FIELD = '_neighbors';
-export const PROCESSED_STKDE_HEIGHT_FIELD = '_stkde_height';    
+export const PROCESSED_HEIGHT_FIELD = '_height';    
 export const SCALE_FACTOR = 5;
 export const COLORS = {
     // use RGB values

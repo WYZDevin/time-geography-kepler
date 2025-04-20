@@ -1,7 +1,9 @@
 import { FeatureCollection, GeoJSONFeature } from "@/interfaces/data-interfaces";
-import { PROCESSED_ALTITUDE_FIELD, SCALE_FACTOR } from "@/utils/constants";
+import { PROCESSED_TIME_FIELD, SCALE_FACTOR } from "@/utils/constants";
 import { Field, ProcessorResult } from "@kepler.gl/types";
 import { processGeojson } from "@kepler.gl/processors";
+import { selectHeightScale } from "@/stores/metadata-slice";
+import store from "@/stores/store";
 
 /**
  * Determines if three points make a left turn (counter-clockwise)
@@ -26,8 +28,9 @@ const isLeftTurn = (p1: number[], p2: number[], p3: number[]): boolean => {
  */
 const getConvexHull = (points: number[][], maxHeight: number, initialHeight: number = 0): FeatureCollection => {
     const absoluteHeight = maxHeight - initialHeight;
-    initialHeight = initialHeight * SCALE_FACTOR;
-    
+    const heightScale = selectHeightScale(store.getState());
+    initialHeight = initialHeight * heightScale;
+
     if (points.length <= 2) {
         // Not enough points to form a hull
         return {
@@ -90,7 +93,7 @@ const getConvexHull = (points: number[][], maxHeight: number, initialHeight: num
             {
                 type: "Feature",
                 properties: {
-                    [PROCESSED_ALTITUDE_FIELD]: absoluteHeight,
+                    [PROCESSED_TIME_FIELD]: absoluteHeight,
                     ['initialHeight']: initialHeight
                 },
                 geometry: {
@@ -113,7 +116,7 @@ const createRawConvexHullGeojson = (data: FeatureCollection, initialHeight: numb
     let maxHeight = -1
     // if the max height is not provided, get the height field
     if (inputMaxHeight === -1) {
-        const heights: number[] = data.features.map((f: GeoJSONFeature) => f.properties[PROCESSED_ALTITUDE_FIELD]);
+        const heights: number[] = data.features.map((f: GeoJSONFeature) => f.properties[PROCESSED_TIME_FIELD]);
         maxHeight = Math.max(...heights);
     } else {
         maxHeight = inputMaxHeight;

@@ -32,6 +32,7 @@ export const fileFormSchema = z.object({
     stayField: z.string().optional(),
     stayValues: z.array(z.any()).optional(),
     visualizeSTKDE: z.boolean().optional(),
+    visualizeAxis: z.boolean().optional(),
 });
 
 interface FileFormValues extends z.infer<typeof fileFormSchema> {}
