@@ -8,7 +8,7 @@ export const COLORS = {
     AQUARIUM: [142, 202, 230], // '#8ecae6'
     ACTIVITY_SPACE: [230, 57, 70], // '#e63946'
     DEFAULT: [73, 80, 87], // '#495057'
-    STKDE_99: [218, 0, 0],
-    STKDE_95: [77, 193, 156],
-    STKDE_90: [248, 248, 249],
+    STKDE_99: [220, 38, 127], // Strong magenta-red for 99% (highest transparency)
+    STKDE_95: [255, 87, 51], // Strong orange-red for 95% (strongest color)
+    STKDE_90: [255, 193, 7], // Yellow for 90% (medium transparency)
 }

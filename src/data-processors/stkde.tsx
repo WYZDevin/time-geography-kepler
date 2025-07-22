@@ -33,6 +33,12 @@ export async function tf_stkde(
   cell_size?: number,
   n_time_slices: number = 10
 ): Promise<STKDEResult> {
+  // Check WebGL memory before starting
+  const memInfo = tf.memory();
+  console.log('TensorFlow.js memory before STKDE:', memInfo);
+  
+  // Limit grid size to prevent WebGL issues
+  const MAX_GRID_CELLS = 2500; // 50x50 max grid
   // --- Data Extraction ---
   const features = gdf.features;
   const n = features.length;
@@ -73,7 +79,7 @@ export async function tf_stkde(
     const dy = tf.sub(tfY, mean_y);
     const distances = tf.sqrt(tf.add(tf.square(dx), tf.square(dy))) as tf.Tensor1D;
     const SD = tf.sqrt(tf.mean(tf.add(tf.square(dx), tf.square(dy))));
-    const Dm = medianTensor(distances);
+    const Dm = await medianTensor(distances);
     const SD_val = SD.arraySync() as number;
     const Dm_val = Dm.arraySync() as number;
     const robust_sigma = (Dm_val > 0 ? Dm_val / 0.6745 : SD_val);
@@ -85,8 +91,8 @@ export async function tf_stkde(
   }
   if (temporal_bandwidth === undefined) {
     const sigma_t = stdTensor(tfT);
-    const q25 = percentileTensor(tfT, 25);
-    const q75 = percentileTensor(tfT, 75);
+    const q25 = await percentileTensor(tfT, 25);
+    const q75 = await percentileTensor(tfT, 75);
     const iqr_t = q75.sub(q25);
     const sigma_t_val = sigma_t.arraySync() as number;
     const iqr_t_val = iqr_t.arraySync() as number;
@@ -113,22 +119,38 @@ export async function tf_stkde(
     cell_size = Math.min(dx_extent, dy_extent) / 50;
     if (cell_size <= 0) cell_size = 1.0;
   }
-  const n_cols = Math.ceil((x_max - x_min) / cell_size);
-  const n_rows = Math.ceil((y_max - y_min) / cell_size);
+  let n_cols = Math.ceil((x_max - x_min) / cell_size);
+  let n_rows = Math.ceil((y_max - y_min) / cell_size);
+  
+  // Limit grid size to prevent WebGL framebuffer errors
+  const totalCells = n_cols * n_rows;
+  if (totalCells > MAX_GRID_CELLS) {
+    console.warn(`Grid size ${n_cols}x${n_rows} (${totalCells} cells) exceeds limit. Reducing to prevent WebGL errors.`);
+    const scaleFactor = Math.sqrt(MAX_GRID_CELLS / totalCells);
+    n_cols = Math.floor(n_cols * scaleFactor);
+    n_rows = Math.floor(n_rows * scaleFactor);
+    // Recalculate cell_size based on new grid dimensions
+    cell_size = Math.max((x_max - x_min) / n_cols, (y_max - y_min) / n_rows);
+  }
+  
   x_max = x_min + n_cols * cell_size;
   y_max = y_min + n_rows * cell_size;
 
   // Compute grid cell center coordinates using TensorFlow.js (replace for-loop with tensor operations).
   const colIndices = tf.range(0, n_cols, 1, 'float32');
-  const x_centers_tensor = tf.add(tf.scalar(x_min + 0.5 * cell_size), tf.mul(colIndices, cell_size));
+  const x_min_scalar = tf.scalar(x_min + 0.5 * cell_size);
+  const x_centers_tensor = tf.add(x_min_scalar, tf.mul(colIndices, cell_size));
   const x_centers = x_centers_tensor.arraySync() as number[];
   colIndices.dispose();
+  x_min_scalar.dispose();
   x_centers_tensor.dispose();
 
   const rowIndices = tf.range(0, n_rows, 1, 'float32');
-  const y_centers_tensor = tf.add(tf.scalar(y_min + 0.5 * cell_size), tf.mul(rowIndices, cell_size));
+  const y_min_scalar = tf.scalar(y_min + 0.5 * cell_size);
+  const y_centers_tensor = tf.add(y_min_scalar, tf.mul(rowIndices, cell_size));
   const y_centers = y_centers_tensor.arraySync() as number[];
   rowIndices.dispose();
+  y_min_scalar.dispose();
   y_centers_tensor.dispose();
 
   // --- Time Slices Definition ---
@@ -190,6 +212,10 @@ export async function tf_stkde(
     mask.dispose();
     t_weight_all.dispose();
     t_weight.dispose();
+    tfX_exp.dispose();
+    tfY_exp.dispose();
+    Xgrid_exp.dispose();
+    Ygrid_exp.dispose();
     diffX.dispose();
     diffY.dispose();
     dist2.dispose();
@@ -212,6 +238,11 @@ export async function tf_stkde(
   Xgrid.dispose();
   Ygrid.dispose();
 
+  // Force garbage collection of WebGL resources
+  if (typeof window !== 'undefined' && (window as any).gc) {
+    (window as any).gc();
+  }
+
   const density: number[][][] | number[][] = (n_time_slices > 1)
     ? densityTimeSlices
     : densityTimeSlices[0];
@@ -227,8 +258,8 @@ export async function tf_stkde(
  * Computes the median of a 1D tensor.
  * Returns a scalar tensor.
  */
-function medianTensor(t: tf.Tensor1D): tf.Tensor {
-  const values = t.arraySync() as number[];
+async function medianTensor(t: tf.Tensor1D): Promise<tf.Tensor> {
+  const values = await t.array() as number[];
   const sortedValues = values.sort((a, b) => a - b);
   const sorted = tf.tensor1d(sortedValues);
   const len = t.shape[0];
@@ -252,8 +283,8 @@ function medianTensor(t: tf.Tensor1D): tf.Tensor {
  * Computes the specified percentile of a 1D tensor.
  * Returns a scalar tensor.
  */
-function percentileTensor(t: tf.Tensor1D, p: number): tf.Tensor {
-  const values = t.arraySync() as number[];
+async function percentileTensor(t: tf.Tensor1D, p: number): Promise<tf.Tensor> {
+  const values = await t.array() as number[];
   const sortedValues = values.sort((a, b) => a - b);
   const sorted = tf.tensor1d(sortedValues);
   const len = t.shape[0];
@@ -283,12 +314,12 @@ function percentileTensor(t: tf.Tensor1D, p: number): tf.Tensor {
  * This function first extracts nonzero density values, computes the quantile thresholds
  * for each provided level, and then assigns integer categories:
  *  • 0: below the 0.9 threshold,
- *  • 1: between the 0.9 and 0.95 thresholds,
- *  • 2: between the 0.95 and 0.99 thresholds,
+ *  • 1: between the 0.9 and 0.975 thresholds,
+ *  • 2: between the 0.975 and 0.99 thresholds,
  *  • 3: above the 0.99 threshold.
  *
  * @param densitySlice 2D tensor of density values.
- * @param levels Array of quantile levels (default: [0.9, 0.95, 0.99]).
+ * @param levels Array of quantile levels (default: [0.9, 0.975, 0.99]).
  * @returns A Promise resolving to an object with:
  *   - classification: a tf.Tensor2D (dtype int32) with category labels.
  *   - thresholds: an object mapping each quantile level to its computed density threshold.
@@ -303,7 +334,7 @@ export async function classifyByQuantile(
 
   const thresholds: { [key: number]: number } = {};
   for (const lvl of levels) {
-    const threshTensor = percentileTensor(nonzeroValues, lvl * 100); // 0.9 -> 90th percentile
+    const threshTensor = await percentileTensor(nonzeroValues, lvl * 100); // 0.9 -> 90th percentile
     const thresh = (await threshTensor.array()) as number;
     thresholds[lvl] = thresh;
     threshTensor.dispose();
@@ -315,14 +346,14 @@ export async function classifyByQuantile(
   let classification = tf.zerosLike(densitySlice);
 
   const q90 = tf.scalar(thresholds[0.9]);
-  const q95 = tf.scalar(thresholds[0.975]);
+  const q975 = tf.scalar(thresholds[0.975]);
   const q99 = tf.scalar(thresholds[0.99]);
 
-  // Category 1: density > q90 and density < q95 → assign label 1.
-  const mask1 = densitySlice.greater(q90).logicalAnd(densitySlice.less(q95));
+  // Category 1: density > q90 and density < q975 → assign label 1.
+  const mask1 = densitySlice.greater(q90).logicalAnd(densitySlice.less(q975));
   classification = tf.where(mask1, tf.fill(densitySlice.shape, 1, 'int32'), classification);
-  // Category 2: density > q95 and density < q99 → assign label 2.
-  const mask2 = densitySlice.greater(q95).logicalAnd(densitySlice.less(q99));
+  // Category 2: density > q975 and density < q99 → assign label 2.
+  const mask2 = densitySlice.greater(q975).logicalAnd(densitySlice.less(q99));
   classification = tf.where(mask2, tf.fill(densitySlice.shape, 2, 'int32'), classification);
   // Category 3: density > q99 → assign label 3.
   const mask3 = densitySlice.greater(q99);
@@ -330,7 +361,7 @@ export async function classifyByQuantile(
 
   // Clean up intermediate tensors.
   q90.dispose();
-  q95.dispose();
+  q975.dispose();
   q99.dispose();
   nonzeroMask.dispose();
   nonzeroValues.dispose();
@@ -436,6 +467,11 @@ export async function classifyKDE(
 
   // Dispose of the classification slice tensors if no longer needed.
   classificationSlices.forEach((cs) => cs.dispose());
+  
+  // Clean up density tensor if it was created here
+  if (density.rank === 2 && density3D !== density) {
+    density3D.dispose();
+  }
 
   return {
     X,
@@ -537,7 +573,7 @@ export function createClassificationGeoJSON(
         properties: {
           classification: flatClassification[i],
           z: z,
-          PROCESSED_STKDE_HEIGHT_FIELD: cell_size_meters * 1
+          [PROCESSED_HEIGHT_FIELD]: cell_size_meters * 1
         }
       };
       featuresByClassification[flatClassification[i]].push(feature);
@@ -574,8 +610,18 @@ export async function createSTKDE(
   cell_size?: number,
   n_time_slices: number = 24
 ): Promise<GeoJSON.FeatureCollection[]> {
-  // 1. Compute the STKDE result.
-  const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
+  try {
+    // Check available memory before starting
+    const initialMemory = tf.memory();
+    console.log('Initial TensorFlow.js memory:', initialMemory);
+    
+    if (initialMemory.numTensors > 100) {
+      console.warn('High tensor count detected, cleaning up...');
+      // tf.disposeVariables();
+    }
+
+    // 1. Compute the STKDE result.
+    const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
 
   // 2. Convert the density output to a tf.Tensor3D.
   let densityTensor: tf.Tensor3D;
@@ -607,7 +653,14 @@ export async function createSTKDE(
     stkdeResult.cell_size
   );
 
+  // Clean up the density tensor
+  densityTensor.dispose();
+  
   return densityFeatures;
+  } catch (error) {
+    console.error('Error in stkde_analysis:', error);
+    throw error;
+  }
 }
 /**
  * Computes the standard deviation of a 1D tensor.

@@ -1,4 +1,4 @@
-import { ColumnMapping, FeatureCollection, GeoJSONFeature } from "@/interfaces/data-interfaces";
+import { ColumnMapping, FeatureCollection } from "@/interfaces/data-interfaces";
 import { findCoordinateAndTimeColumns } from "@/data-processors/data-handler";
 import * as turf from '@turf/turf';
 import { point, distance } from '@turf/turf';
@@ -24,20 +24,36 @@ function addOrderByTime(data: FeatureCollection, mapping: ColumnMapping): Featur
     return timeA - timeB;
   });
 
-  // Use turf.featureEach to iterate over the sorted features and assign the "order" property.
-  turf.featureEach({ type: "FeatureCollection", features: sortedFeatures }, (feature: GeoJSONFeature, index: number) => {
-    // add the time order and neighbors to the feature for visualization
-    feature.properties[PROCESSED_TIME_FIELD] = index;
-    feature.properties[PROCESSED_NEIGHBORS_FIELD] = [index - 1, index + 1];
+  // Create new features with updated properties and geometry
+  const processedFeatures = sortedFeatures.map((feature, index) => {
+    // Create new properties object with additional fields
+    const newProperties = {
+      ...feature.properties,
+      [PROCESSED_TIME_FIELD]: index,
+      [PROCESSED_NEIGHBORS_FIELD]: [index - 1, index + 1]
+    };
 
-    // add altitude to the geometry
-    feature.geometry.coordinates[2] = index;
+    // Create new geometry with altitude (z-coordinate)
+    const newGeometry = {
+      ...feature.geometry,
+      coordinates: [
+        ...feature.geometry.coordinates.slice(0, 2), // x, y
+        index // z (altitude)
+      ]
+    };
+
+    // Return new feature object
+    return {
+      ...feature,
+      properties: newProperties,
+      geometry: newGeometry
+    };
   });
 
-  // Return a new FeatureCollection with the sorted (and updated) features.
+  // Return a new FeatureCollection with the processed features.
   return {
     ...data,
-    features: sortedFeatures,
+    features: processedFeatures,
   };
 }
 
@@ -48,13 +64,13 @@ function getBBoxSideLengths(bbox: number[]) {
   const bottomLeft = point([minX, minY]);
   const bottomRight = point([maxX, minY]);
   const topLeft = point([minX, maxY]);
-  const topRight = point([maxX, maxY]);
+  // const topRight = point([maxX, maxY]);
 
   // Compute distances in kilometers
   const widthBottom = distance(bottomLeft, bottomRight, { units: 'meters' });
-  const widthTop = distance(topLeft, topRight, { units: 'meters' });
+  const widthTop = distance(topLeft, point([maxX, maxY]), { units: 'meters' });
   const heightLeft = distance(bottomLeft, topLeft, { units: 'meters' });
-  const heightRight = distance(bottomRight, topRight, { units: 'meters' });
+  const heightRight = distance(bottomRight, point([maxX, maxY]), { units: 'meters' });
 
   return {
     bottom: widthBottom,

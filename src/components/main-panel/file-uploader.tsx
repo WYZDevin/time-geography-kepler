@@ -1,5 +1,4 @@
 import { FeatureCollection } from "@/interfaces/data-interfaces";
-import { processGeojson } from "@kepler.gl/processors";
 import React from "react";
 import { useDropzone } from "react-dropzone";
 
@@ -22,7 +21,7 @@ const FileUploader = ({ onFileLoaded }: { onFileLoaded: (rawData: FeatureCollect
     const onDrop = React.useCallback((acceptedFiles: File[]) => {
         const file = acceptedFiles[0];
         processFile(file);
-    }, []);
+    }, [processFile]);
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,

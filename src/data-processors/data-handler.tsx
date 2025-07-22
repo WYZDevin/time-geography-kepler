@@ -1,16 +1,14 @@
 import store from "@/stores/store";
 import { addDataToMap } from '@kepler.gl/actions';
 
-import { processGeojson } from '@kepler.gl/processors';
 import { updateMap } from '@kepler.gl/actions';
 import { ColumnMapping, FeatureCollection, FileFormValues } from "@/interfaces/data-interfaces";
-import { createCustomConfigActivitySpace, createCustomConfigAquarim, createCustomConfigPoints, createCustomConfigSTKDE, createCustomLineLayer, createCustomConfigAxisLine, createCustomConfigAxisLabel } from "../utils/config";
-import { PROCESSED_TIME_FIELD } from "../utils/constants";
+import { createCustomConfigActivitySpace, createCustomConfigAquarim, createCustomLineLayer, createCustomConfigAxisLine, createCustomConfigAxisLabel } from "../utils/config";
+// import { PROCESSED_TIME_FIELD } from "../utils/constants";
 import { preprocessGeojsonData } from "@/data-processors/data-preprocessing";
-import { Field, ProcessorResult } from "@kepler.gl/types";
 import { createRawConvexHullGeojson } from "./convex-hull";
 import { createStayArea } from "./activity-space";
-import { createSTKDE, STKDEResult } from "./stkde";
+import { createSTKDE } from "./stkde";
 import { progressService } from "@/components/custom-components/progress-bar";
 import * as turf from "@turf/turf";
 import { createAxisData } from "./axis";
@@ -145,9 +143,9 @@ const addDataToKeplerWithTime = async (
     const customConfigLine = createCustomLineLayer(fileFormValues.latitude, fileFormValues.longitude);
     const customConfigAxis = createCustomConfigAxisLine('my-axis', false, "Coordinate Axes");
     const customConfigAxisLabel = createCustomConfigAxisLabel('my-axis-labels', false, "Coordinate Axes");
-    const customConfigSTKDE99 = createCustomConfigSTKDE('my-stkde-class3', false, "STKDE 99", 99, 1);
-    const customConfigSTKDE95 = createCustomConfigSTKDE('my-stkde-class2', false, "STKDE 95", 95, 0.1);
-    const customConfigSTKDE90 = createCustomConfigSTKDE('my-stkde-class1', false, "STKDE 90", 90, 0.01);
+    const customConfigSTKDE99 = createCustomConfigSTKDE('my-stkde-class3', false, "STKDE 99%", 99, 0.3);  // Highest transparency
+    const customConfigSTKDE95 = createCustomConfigSTKDE('my-stkde-class2', false, "STKDE 95%", 95, 0.8);  // Strongest color
+    const customConfigSTKDE90 = createCustomConfigSTKDE('my-stkde-class1', false, "STKDE 90%", 90, 0.6);  // Medium transparency
 
     // add points data to kepler
     store.dispatch(addDataToMap({
@@ -236,7 +234,7 @@ const addDataToKeplerWithTime = async (
         // zoom: 10// Subtract 3 to give some padding
     }));
 
-    console.log("Data added to Kepler");
+    console.log("Data added to Kepler");            
 };
 
 export { addDataToKeplerWithTime, findCoordinateAndTimeColumns };

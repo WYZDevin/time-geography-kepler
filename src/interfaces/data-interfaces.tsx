@@ -21,6 +21,25 @@ interface FeatureCollection {
     features: GeoJSONFeature[];
 }
 
+// New interfaces for toolbox structure
+export interface Tool {
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    category: 'visualization' | 'analysis' | 'processing';
+    requiredFields: string[];
+    optionalFields?: string[];
+}
+
+export interface ToolWorkflowState {
+    selectedTool: Tool | null;
+    currentStep: 'tool-selection' | 'data-upload' | 'field-mapping' | 'options' | 'visualization';
+    uploadedData: FeatureCollection | null;
+    fieldMapping: ColumnMapping | null;
+    toolOptions: Record<string, any>;
+}
+
 // Define a schema for the form using zod
 export const fileFormSchema = z.object({
     latitude: z.string().nonempty('Latitude is required'),

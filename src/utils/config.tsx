@@ -1,8 +1,7 @@
-import { useColor } from "@/contexts/color-context";
+// import { useColor } from "@/contexts/color-context";
 import { selectHeightScale } from "@/stores/metadata-slice";
 import store from "@/stores/store";
-import { PROCESSED_NEIGHBORS_FIELD, PROCESSED_TIME_FIELD, SCALE_FACTOR, COLORS, PROCESSED_HEIGHT_FIELD } from "@/utils/constants";
-
+import { PROCESSED_NEIGHBORS_FIELD, PROCESSED_TIME_FIELD, COLORS, PROCESSED_HEIGHT_FIELD } from "@/utils/constants";
 
 export const createCustomLineLayer = (latField: string, longField: string) => {
     const heightScale = selectHeightScale(store.getState());
@@ -166,7 +165,12 @@ export const createCustomConfigAquarim = (dataId: string, hidden: boolean = fals
 
     }
 }
-
+function uuidv4() {
+    return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+      (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
+    );
+  }
+  
 export const createCustomConfigSTKDE = (
     dataId: string,
     hidden: boolean = false,
@@ -175,6 +179,7 @@ export const createCustomConfigSTKDE = (
     opacity: number = 0.8) => {
     const color = percent === 99 ? COLORS.STKDE_99 : percent === 95 ? COLORS.STKDE_95 : COLORS.STKDE_90;
     return {
+        id: uuidv4(),
         type: "geojson",
         config: {
             "dataId": dataId,
@@ -200,10 +205,7 @@ export const createCustomConfigSTKDE = (
             },
             "hidden": false,
             // height field should be here to be able to work
-            "heightField": {
-                "name": PROCESSED_HEIGHT_FIELD,
-                "type": "float"
-            }
+ 
         },
         visualChannels: {
             "heightScale": "linear",
@@ -212,7 +214,11 @@ export const createCustomConfigSTKDE = (
             "strokeColorField": null,
             "strokeColorScale": "quantile",
             "sizeField": null,
-            "sizeScale": "linear"
+            "sizeScale": "linear",
+            "heightField": {
+                "name": PROCESSED_HEIGHT_FIELD,
+                "type": "float"
+            }
         }
 
     }
@@ -270,34 +276,30 @@ export const createCustomConfigAxisLabel = (
         type: "point",
         config: {
             "dataId": dataId,
-            "columnMode": "points",
+            "columnMode": "geojson",
             "label": label,
             "color": [221, 178, 124],
             "highlightColor": [252, 242, 26, 255],
             "columns": {
-                "lat": "latitude",
-                "lng": "longitude",
-                "altitude": PROCESSED_HEIGHT_FIELD
+                'geojson': '_geojson'
             },
             "isVisible": !hidden,
             "visConfig": {
                 "radius": 10,
-                "fixedRadius": false,
-                "opacity": 0.8,
-                "outline": false,
-                "thickness": 2,
-                "strokeColor": null,
+                "sizeRange": [0, 10],
                 "radiusRange": [0, 50],
+                "heightRange": [0, 500],
+                "elevationScale": 1,
+                "stroked": true,
                 "filled": true,
-                "billboard": false,
-                "allowHover": true,
-                "showNeighborOnHover": false,
-                "showHighlightColor": true
+                "enable3d": true,
+                "wireframe": false,
+                "fixedHeight": true
             },
             "hidden": false,
             "textLabel": [
                 {
-                    "field": { "name": "text", "type": "string" },
+                    "field": { "name": "Label", "type": "string" },
                     "color": [218, 0, 0],
                     "size": 18,
                     "offset": [0, 0],

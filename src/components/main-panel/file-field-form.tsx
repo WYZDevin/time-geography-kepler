@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
 import { useForm, Controller } from 'react-hook-form';
-import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 // Import shadcn/ui form and select components
 import {
@@ -18,16 +17,16 @@ import {
   SelectItem,
 } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { addDataToKeplerWithTime, findCoordinateAndTimeColumns } from '@/data-processors/data-handler';
+import { findCoordinateAndTimeColumns } from '@/data-processors/data-handler';
 import { Field } from '@kepler.gl/types';
 import MultipleSelector, { Option } from '@/components/ui/multiple-selector';
 import { getUniqueValuesFromGeoJSON } from '@/data-processors/data-preprocessing';
-import { fileFormSchema, FileFormValues } from '@/interfaces/data-interfaces';
-import { useDispatch, useSelector } from 'react-redux';
+import { fileFormSchema, FileFormValues, FeatureCollection } from '@/interfaces/data-interfaces';
+import { useSelector } from 'react-redux';
 import { RootState } from '@/stores/store';
 import { progressService } from '@/components/custom-components/progress-bar';
 type FileFormProps = {
-  rawGeoData: any;
+  rawGeoData: FeatureCollection;
   fields: Field[];
 };
 
@@ -54,7 +53,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
   // Set default values based on the available fields
   useEffect(() => {
     const featureNames = fields.map(field => field.name);
-    const { longitude, latitude, altitude, time } = findCoordinateAndTimeColumns(featureNames);
+    const { longitude, latitude, time } = findCoordinateAndTimeColumns(featureNames);
     reset({
       latitude: latitude || '',
       longitude: longitude || '',
@@ -75,7 +74,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
     progressService.start(data);
     try {
       // Call your helper function with the raw geo data, form values, and fields
-      await addDataToKeplerWithTime(rawGeoData, data);
+      // await addDataToKeplerWithTime(rawGeoData, data);
     } catch (error) {
       console.error('Error adding data to Kepler:', error);
       progressService.update('Error adding data to Kepler');
@@ -246,7 +245,7 @@ const FileForm: React.FC<FileFormProps> = ({ rawGeoData, fields }) => {
               <FormField
                 control={control}
                 name="stayValues"
-                render={({ field }) => (
+                render={() => (
                   <FormItem>
                     <FormLabel>Stay Values</FormLabel>
                     <FormControl>

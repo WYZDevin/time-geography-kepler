@@ -5,6 +5,8 @@ import { configureStore } from '@reduxjs/toolkit';
 import keplerGlReducer, { enhanceReduxMiddleware } from '@kepler.gl/reducers';
 import progressReducer from './progress-slice';
 import metadataReducer from './metadata-slice';
+import workflowReducer from './workflow-slice';
+import dataReducer from './data-slice';
 
 const customKeplerGlReducer = keplerGlReducer.initialState({
   uiState: {
@@ -35,6 +37,8 @@ const store = configureStore({
     keplerGl: customKeplerGlReducer,
     metadata: metadataReducer,
     progress: progressReducer,
+    workflow: workflowReducer,
+    data: dataReducer,
   },
   middleware: () => middlewares,
 });

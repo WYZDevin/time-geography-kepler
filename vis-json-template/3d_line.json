@@ -5,13 +5,13 @@
             "filters": [],
             "layers": [
                 {
-                    "id": "qbmqmt",
+                    "id": "rxkuoqd",
                     "type": "line",
                     "config": {
-                        "dataId": "myData",
+                        "dataId": "time-geography-trajectory",
                         "columnMode": "neighbors",
-                        "label": "myData",
-                        "color": [218, 112, 191],
+                        "label": "new layer",
+                        "color": [130, 154, 227],
                         "highlightColor": [252, 242, 26, 255],
                         "columns": {
                             "lat": "latitude",
@@ -22,7 +22,7 @@
                         "isVisible": true,
                         "visConfig": {
                             "opacity": 0.8,
-                            "thickness": 3.2,
+                            "thickness": 2,
                             "colorRange": {
                                 "name": "Global Warming",
                                 "type": "sequential",
@@ -38,7 +38,7 @@
                             },
                             "sizeRange": [0, 10],
                             "targetColor": null,
-                            "elevationScale": 10.1
+                            "elevationScale": 6.4
                         },
                         "hidden": false,
                         "textLabel": [
@@ -68,12 +68,12 @@
             "interactionConfig": {
                 "tooltip": {
                     "fieldsToShow": {
-                        "myData": [
+                        "time-geography-trajectory": [
+                            { "name": "Unnamed: 0", "format": null },
                             { "name": "date_logged", "format": null },
-                            { "name": "n_trip_id", "format": null },
-                            { "name": "order", "format": null },
-                            { "name": "_time_order", "format": null },
-                            { "name": "_neighbors", "format": null }
+                            { "name": "log_reason", "format": null },
+                            { "name": "transmission_delays", "format": null },
+                            { "name": "gps_age", "format": null }
                         ]
                     },
                     "compareMode": false,
@@ -91,12 +91,12 @@
             "editor": { "features": [], "visible": true }
         },
         "mapState": {
-            "bearing": -44.13461538461538,
+            "bearing": -1.6274135048680405,
             "dragRotate": true,
-            "latitude": 43.53630411119042,
-            "longitude": -79.61767045496396,
-            "pitch": 53.71139202132224,
-            "zoom": 11.55576237091112,
+            "latitude": 43.7098388150452,
+            "longitude": -79.72861352234165,
+            "pitch": 56.508143926046166,
+            "zoom": 10.794408074000748,
             "isSplit": false,
             "isViewportSynced": true,
             "isZoomLocked": false,
