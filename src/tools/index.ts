@@ -3,6 +3,7 @@ import { TimeGeographyTool } from './time-geography-tool';
 import { StayPointsTool } from './stay-points-tool';
 import { STKDETool } from './stkde-tool';
 import { PotentialPathEstimationTool } from './potential-path-estimation-tool';
+import { SpaceTimeCubeTool } from './space-time-cube-tool';
 
 // Import all tool implementations
 const availableTools = [
@@ -10,6 +11,7 @@ const availableTools = [
     new StayPointsTool(), 
     new STKDETool(),
     new PotentialPathEstimationTool(),
+    new SpaceTimeCubeTool(),
     // new TemporalAggregationTool(),
     // new SpatialClusteringTool(),
 ];

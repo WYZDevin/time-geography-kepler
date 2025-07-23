@@ -153,7 +153,7 @@ export abstract class AbstractBaseTool implements BaseTool {
             datasets,
             metadata: {
                 processedFeatures: totalFeatures,
-                processingTime: 0, // Will be filled by AnalysisRunner
+                processingTime: 0, // Will be filled by UnifiedAnalysisService
                 totalDatasets: datasets.length,
                 templatesUsed,
                 ...metadata

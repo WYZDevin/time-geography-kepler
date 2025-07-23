@@ -110,13 +110,19 @@ export class PotentialPathEstimationTool extends AbstractBaseTool {
 
     async analyze(context: AnalysisContext, progressCallback?: ProgressCallback): Promise<AnalysisResult> {
         try {
-            this.updateProgress(progressCallback, 5, 'Running Time Geography analysis for 3D trajectory...');
+            this.updateProgress(progressCallback, 2, 'Preprocessing data to set base state...');
 
             const { data, fieldMapping, options } = context;
 
+            // Always call preprocessing to set the base state (side length, heightScale)
+            const basePreprocessedData = preprocessGeojsonData(data);
+            console.log('PPE Tool: Base data preprocessing complete');
+
+            this.updateProgress(progressCallback, 5, 'Running Time Geography analysis for 3D trajectory...');
+
             // First run Time Geography tool to get 3D trajectory with altitude processing
             const timeGeographyContext = {
-                data: data,
+                data: basePreprocessedData,
                 fieldMapping,
                 options: {
                     visualizeStay: false,     // We'll do our own stay point detection

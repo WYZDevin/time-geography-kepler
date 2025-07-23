@@ -3,21 +3,21 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../../stores/store';
 import { Button } from '@/components/ui/button';
 import { resetWorkflow, setCurrentStep } from '../../../stores/workflow-slice';
-import { AnalysisRunner } from '../../../utils/analysis-runner';
+import { createUnifiedAnalysisService, UnifiedAnalysisResponse } from '../../../services/unified-analysis-service';
 import { AnalysisResult } from '../../../interfaces/tool-interfaces';
 
 const VisualizationStep = () => {
     const dispatch = useDispatch();
     const { selectedTool, uploadedData, fieldMapping, toolOptions } = useSelector((state: RootState) => state.workflow);
-    const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+    const [analysisResult, setAnalysisResult] = useState<UnifiedAnalysisResponse | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showErrorDetails, setShowErrorDetails] = useState(false);
 
     useEffect(() => {
+        console.log("VisualizationStep: selectedTool", selectedTool);
         if (uploadedData && fieldMapping && selectedTool && toolOptions && !analysisResult) {
             runAnalysis();
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [uploadedData, fieldMapping, selectedTool, toolOptions, analysisResult]);
 
     const runAnalysis = async () => {
@@ -25,34 +25,35 @@ const VisualizationStep = () => {
 
         setIsAnalyzing(true);
         try {
-            const context = {
+            // Create unified analysis service
+            const analysisService = createUnifiedAnalysisService(dispatch);
+
+            const request = {
+                toolId: selectedTool.id,
                 data: uploadedData,
                 fieldMapping,
-                options: toolOptions,
-                toolId: selectedTool.id
+                options: toolOptions || {}
             };
 
-            const result = await AnalysisRunner.executeAnalysis(context, (progress, message) => {
+            const result = await analysisService.executeAnalysis(request, (progress, message) => {
                 console.log(`Analysis progress: ${progress}% - ${message}`);
             });
 
             setAnalysisResult(result);
             console.log("Analysis result:", result);
 
-            if (result.success && result.datasets) {
-                // Add all datasets to Kepler.gl map
-                const keplerActions = AnalysisRunner.createKeplerActions(result, selectedTool.name);
-                keplerActions.forEach(action => {
-                    if (action) {
-                        dispatch(action);
-                    }
-                });
+            // Visualization is automatically handled by the unified service
+            if (!result.success) {
+                console.error("Analysis failed:", result.error);
             }
         } catch (error) {
             console.error('Analysis execution error:', error);
             setAnalysisResult({
                 success: false,
-                error: `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+                datasets: [],
+                error: `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                executionTime: 0,
+                keplerActions: []
             });
             console.log("Error during analysis execution:", error);
         } finally {
@@ -106,8 +107,8 @@ const VisualizationStep = () => {
                     <div className="bg-gray-50 p-3 rounded">
                         <div className="font-medium text-gray-700 mb-1">Processing Time</div>
                         <div className="text-gray-600">
-                            {analysisResult?.metadata?.processingTime ? 
-                                `${analysisResult.metadata.processingTime}ms` : 'N/A'}
+                            {analysisResult?.executionTime ? 
+                                `${analysisResult.executionTime}ms` : 'N/A'}
                         </div>
                     </div>
                     <div className="bg-gray-50 p-3 rounded">
