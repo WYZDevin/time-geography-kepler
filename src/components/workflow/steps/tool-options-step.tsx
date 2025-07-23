@@ -155,7 +155,7 @@ const ToolOptionsStep = () => {
     };
 
     return (
-        <div className="h-full flex flex-col p-4 overflow-auto">
+        <div className="h-full flex flex-col p-4">
             <div className="mb-4">
                 <h1 className="text-lg font-bold text-gray-800 mb-1">Configure Options</h1>
                 <p className="text-xs text-gray-600">
@@ -163,7 +163,7 @@ const ToolOptionsStep = () => {
                 </p>
             </div>
 
-            <div className="flex-1">
+            <div className="flex-1 overflow-auto">
                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
                     <div className="mb-4">
                         <div className="flex items-center mb-2">
@@ -181,12 +181,12 @@ const ToolOptionsStep = () => {
                 </div>
             </div>
 
-            <div className="pt-3 border-t border-gray-200">
+            <div className="pt-3 border-t border-gray-200 flex-shrink-0 bg-gray-50">
                 <Button 
                     onClick={handleSubmit}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-sm"
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-sm font-semibold"
                 >
-                    Start Analysis
+                    🚀 Start Analysis
                 </Button>
             </div>
         </div>

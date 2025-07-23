@@ -5,6 +5,7 @@ import { PROCESSED_HEIGHT_FIELD } from '../utils/constants';
 import { selectHeightScale, selectSideLength } from '../stores/metadata-slice';
 import store, { RootState } from '../stores/store';
 import { preprocessGeojsonData } from '../data-processors/data-preprocessing';
+import { TimeGeographyTool } from './time-geography-tool';
 import * as turf from '@turf/turf';
 
 export class SpaceTimeCubeTool extends AbstractBaseTool {
@@ -80,7 +81,22 @@ export class SpaceTimeCubeTool extends AbstractBaseTool {
             max: 1.0,
             step: 0.1,
             description: 'Opacity of the space-time cubes'
-        }
+        },
+        {
+            key: 'cubeVariableToJoin',
+            label: 'Cube Variable to Join',
+            type: 'select',
+            defaultValue: 'aggregated_value',
+            options: [
+                { value: 'aggregated_value', label: 'Aggregated Value' },
+                { value: 'point_count', label: 'Point Count' },
+                { value: 'time_slice', label: 'Time Slice' },
+                { value: 'base_altitude', label: 'Base Altitude' },
+                { value: 'cube_height', label: 'Cube Height' },
+                { value: 'top_altitude', label: 'Top Altitude' }
+            ],
+            description: 'Select which cube variable to assign to trajectory points'
+        },
     ];
 
     /**
@@ -138,13 +154,25 @@ export class SpaceTimeCubeTool extends AbstractBaseTool {
 
             this.updateProgress(progressCallback, 90, 'Creating visualization datasets...');
 
+            // Always create trajectory visualization (automatic)
+            this.updateProgress(progressCallback, 92, 'Creating trajectory visualization...');
+            const trajectoryDatasets = await this._createTrajectoryVisualization(
+                context,
+                processedData,
+                spaceTimeCubes,
+                spatialGrid
+            );
+
             // Create visualization datasets
-            const datasets = await this._createVisualizationDatasets(
+            const cubeDatasets = await this._createVisualizationDatasets(
                 spaceTimeCubes,
                 randomCubes,
                 spatialGrid,
                 options
             );
+
+            // Combine cube datasets with trajectory datasets
+            const datasets = [...cubeDatasets, ...trajectoryDatasets];
 
             this.updateProgress(progressCallback, 100, 'Space-time cube analysis complete');
 
@@ -423,6 +451,212 @@ export class SpaceTimeCubeTool extends AbstractBaseTool {
                point.latitude < cell.bounds[2][1];
     }
 
+    private async _createTrajectoryVisualization(
+        context: AnalysisContext,
+        processedData: any[],
+        spaceTimeCubes: any[],
+        spatialGrid: any
+    ): Promise<DatasetResult[]> {
+        try {
+            // Create TimeGeographyTool instance for basic trajectory only
+            const timeGeographyTool = new TimeGeographyTool();
+
+            // Create analysis context for trajectory tool (only basic trajectory)
+            const trajectoryContext: AnalysisContext = {
+                ...context,
+                options: {
+                    visualizeStay: false,
+                    visualizeSTKDE: false,
+                    visualizeAxis: false,
+                    timeWindow: 24
+                }
+            };
+
+            // Run basic trajectory analysis
+            const trajectoryResult = await timeGeographyTool.analyze(trajectoryContext);
+
+            if (trajectoryResult.success && trajectoryResult.datasets) {
+                // Create enhanced trajectory points with cube values
+                const enhancedTrajectoryPoints = this._createEnhancedTrajectoryPoints(
+                    processedData,
+                    spaceTimeCubes,
+                    spatialGrid,
+                    context.options
+                );
+
+                // Get basic trajectory dataset and add enhanced points
+                const basicTrajectoryDataset = trajectoryResult.datasets[0]; // First dataset is the trajectory
+                const datasets: DatasetResult[] = [basicTrajectoryDataset];
+
+                // Add enhanced trajectory points dataset
+                if (enhancedTrajectoryPoints.length > 0) {
+                    datasets.push(this.createDataset(
+                        'enhanced-trajectory-points',
+                        'Trajectory Points with Cube Values',
+                        {
+                            type: 'FeatureCollection',
+                            features: enhancedTrajectoryPoints
+                        },
+                        {
+                            description: 'Original trajectory points with assigned cube values',
+                            visualizationConfig: {
+                                config: {
+                                    visState: {
+                                        layers: [this._createEnhancedPointsLayerConfig()]
+                                    }
+                                }
+                            }
+                        }
+                    ));
+                }
+
+                console.log(`SpaceTimeCube: Successfully created trajectory visualization with ${datasets.length} datasets`);
+                return datasets;
+            } else {
+                console.warn('TimeGeography analysis failed, creating fallback trajectory');
+                return [];
+            }
+        } catch (error) {
+            console.error('Error creating trajectory visualization:', error);
+            return [];
+        }
+    }
+
+    private _createEnhancedTrajectoryPoints(
+        processedData: any[],
+        spaceTimeCubes: any[],
+        spatialGrid: any,
+        options: Record<string, any>
+    ): any[] {
+        const enhancedPoints: any[] = [];
+        const cubeVariableToJoin = options.cubeVariableToJoin || 'aggregated_value';
+
+        for (const point of processedData) {
+            // Find which cube this point belongs to
+            const matchingCube = this._findMatchingCube(point, spaceTimeCubes, spatialGrid, options);
+            
+            // Get the selected variable value from the cube
+            const cubeJoinValue = matchingCube ? matchingCube.properties[cubeVariableToJoin] : null;
+            
+            const enhancedPoint = {
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [point.longitude, point.latitude, point.altitude]
+                },
+                properties: {
+                    point_id: `enhanced_point_${point.id}`,
+                    original_value: point.value,
+                    timestamp: point.timeString,
+                    time_ms: point.time,
+                    // Store all cube values for reference
+                    cube_aggregated_value: matchingCube ? matchingCube.properties.aggregated_value : 0,
+                    cube_point_count: matchingCube ? matchingCube.properties.point_count : 0,
+                    cube_time_slice: matchingCube ? matchingCube.properties.time_slice : null,
+                    cube_base_altitude: matchingCube ? matchingCube.properties.base_altitude : null,
+                    cube_height: matchingCube ? matchingCube.properties.cube_height : null,
+                    cube_top_altitude: matchingCube ? matchingCube.properties.top_altitude : null,
+                    // The selected variable for joining
+                    selected_cube_variable: cubeVariableToJoin,
+                    joined_cube_value: cubeJoinValue,
+                    cube_id: matchingCube ? matchingCube.properties.cube_id : null,
+                    elevation: point.altitude,
+                    // Use selected cube variable for visualization if available, otherwise original value
+                    display_value: cubeJoinValue !== null ? cubeJoinValue : point.value,
+                    point_type: 'enhanced_trajectory',
+                    has_cube_match: !!matchingCube
+                }
+            };
+
+            enhancedPoints.push(enhancedPoint);
+        }
+
+        console.log(`SpaceTimeCube: Created ${enhancedPoints.length} enhanced trajectory points using cube variable: ${cubeVariableToJoin}`);
+        return enhancedPoints;
+    }
+
+    private _findMatchingCube(
+        point: any,
+        spaceTimeCubes: any[],
+        spatialGrid: any,
+        options: Record<string, any>
+    ): any | null {
+        // Find which spatial cell this point belongs to
+        const matchingCell = spatialGrid.gridCells.find((cell: any) => this._isPointInCell(point, cell));
+        if (!matchingCell) return null;
+
+        // Find which time slice this point belongs to
+        const timeSlices = options.timeSlices || 10;
+        const allTimes = spaceTimeCubes.map(cube => new Date(cube.properties.start_time).getTime());
+        const minTime = Math.min(...allTimes);
+        const maxTime = Math.max(...allTimes);
+        const timeInterval = (maxTime - minTime) / timeSlices;
+        
+        const timeSlice = Math.floor((point.time - minTime) / timeInterval);
+        const clampedTimeSlice = Math.max(0, Math.min(timeSlices - 1, timeSlice));
+
+        // Find the matching cube
+        const matchingCube = spaceTimeCubes.find(cube => 
+            cube.properties.cell_i === matchingCell.i &&
+            cube.properties.cell_j === matchingCell.j &&
+            cube.properties.time_slice === clampedTimeSlice
+        );
+
+        return matchingCube || null;
+    }
+
+    private _createEnhancedPointsLayerConfig() {
+        const timestamp = Date.now();
+
+        return {
+            id: `enhanced-trajectory-points-layer-${timestamp}`,
+            type: 'point',
+            config: {
+                dataId: 'enhanced-trajectory-points',
+                label: 'Enhanced Trajectory Points',
+                color: [255, 165, 0], // Orange color
+                isVisible: true,
+                visConfig: {
+                    opacity: 0.8,
+                    strokeOpacity: 0.9,
+                    thickness: 2,
+                    strokeColor: [200, 130, 0],
+                    filled: true,
+                    enable3d: true,
+                    elevationScale: 1,
+                    wireframe: false,
+                    radius: 4,
+                    fixedRadius: false,
+                    radiusRange: [2, 15]
+                },
+                hidden: false,
+                columns: {
+                    lat: '_latitude',
+                    lng: '_longitude',
+                    altitude: 'elevation'
+                }
+            },
+            visualChannels: {
+                colorField: {
+                    name: 'joined_cube_value',
+                    type: 'real'
+                },
+                colorScale: 'quantize',
+                colorRange: {
+                    name: 'Global Warming',
+                    type: 'sequential',
+                    category: 'Uber',
+                    colors: ['#5A1846', '#900C3F', '#C70039', '#E3611C', '#F1920E', '#FFC300']
+                },
+                sizeField: {
+                    name: 'joined_cube_value',
+                    type: 'real'
+                },
+                sizeScale: 'linear'
+            }
+        };
+    }
+
     private _aggregateValues(points: any[], method: string): number {
         if (points.length === 0) return 0;
 
@@ -573,6 +807,7 @@ export class SpaceTimeCubeTool extends AbstractBaseTool {
                 }
             }
         ));
+
 
         return datasets;
     }
@@ -750,6 +985,7 @@ export class SpaceTimeCubeTool extends AbstractBaseTool {
         };
     }
 
+
     private _calculateSpatialExtent(spatialGrid: any): { width: number; height: number; area: number } {
         const bounds = spatialGrid.bounds;
         const width = turf.distance(
@@ -806,11 +1042,13 @@ Visualizes spatio-temporal data as 3D cubes representing raster cells through ti
 - **Generate Random Cubes**: Create random cubes based on trajectory patterns
 - **Random Cube Count**: Number of random cubes to generate (10-200)
 - **Cube Opacity**: Transparency of the cube visualization
-
+- **Cube Variable to Join**: Select which cube variable to assign to trajectory points (Aggregated Value, Point Count, Time Slice, Base Altitude, Cube Height, Top Altitude)
 ## Output Datasets
 1. **Space-Time Cubes**: 3D cubes representing aggregated spatio-temporal data
 2. **Random Cubes**: Randomly generated cubes (if enabled)
 3. **Spatial Grid**: Grid structure showing cell boundaries
+4. **Space-Time Trajectory**: 3D trajectory with time elevation (automatically included)
+5. **Enhanced Trajectory Points**: Original trajectory points with assigned cube values (automatically included)
 
 The tool creates a true 3D space-time cube where the X and Y axes represent space and the Z axis represents time, with each cube showing aggregated data values for specific spatial and temporal bins.
         `.trim();

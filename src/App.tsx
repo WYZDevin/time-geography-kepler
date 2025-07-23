@@ -8,11 +8,13 @@ import KeplerGl from '@kepler.gl/components';
 import ProgressDialog from './components/custom-components/progress-bar';
 import { progressService } from './components/custom-components/progress-bar';
 import { Button } from './components/ui/button';
-import { Database, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Database, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
 
 const AppContent = () => {
   const dataSources = useSelector((state: RootState) => Object.values(state.data.dataSources));
-  const [isDataPanelOpen, setIsDataPanelOpen] = useState(false);
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState(true);
+  
+  const [hasAutoOpenedSidePanel, setHasAutoOpenedSidePanel] = useState(false);
 
   // Clean up on unmount
   useEffect(() => {
@@ -22,16 +24,16 @@ const AppContent = () => {
     };
   }, []);
 
-  // Auto-open data panel when data is uploaded
+  // Auto-open side panel when data is uploaded (only once, allow manual closing afterwards)
   useEffect(() => {
-    if (dataSources.length > 0 && !isDataPanelOpen) {
-      setIsDataPanelOpen(true);
+    if (dataSources.length > 0 && !hasAutoOpenedSidePanel) {
+      setIsSidePanelOpen(true);
+      setHasAutoOpenedSidePanel(true);
     }
-  }, [dataSources.length, isDataPanelOpen]);
+  }, [dataSources.length, hasAutoOpenedSidePanel]);
 
-  const dataPanelWidth = isDataPanelOpen ? 320 : 0;
-  const workflowWidth = 400;
-  const mapWidth = window.innerWidth - workflowWidth - dataPanelWidth;
+  const sidePanelWidth = isSidePanelOpen ? 400 : 0;
+  const mapWidth = window.innerWidth - sidePanelWidth;
   const keplerHeight = window.innerHeight - 80;
 
 
@@ -69,54 +71,69 @@ const AppContent = () => {
           </div>
         </div>
 
-        {/* Middle: Workflow container */}
+        {/* Right side: Merged Side Panel (Workflow + Data) */}
         <div 
-          className={`bg-gray-50 h-full overflow-hidden relative z-10 border-l border-r border-gray-200 shadow-lg transition-all duration-300 ${
-            isDataPanelOpen ? 'shadow-lg' : 'shadow-xl'
-          }`}
-          style={{ width: workflowWidth }}
+          className="relative h-full overflow-hidden"
+          style={{ width: isSidePanelOpen ? 400 : 0 }}
         >
-          <WorkflowContainer />
-        </div>
-
-        {/* Right side: Collapsible Data Panel */}
-        <div 
-          className="relative h-full transition-all duration-300 ease-in-out"
-          style={{ width: isDataPanelOpen ? 320 : 0 }}
-        >
-          {/* Data Panel */}
+          {/* Merged Side Panel */}
           <div 
-            className="bg-white h-full border-l border-gray-200 shadow-lg absolute right-0 top-0 z-10 transition-all duration-300 ease-in-out"
+            className="bg-gray-50 h-full border-l border-gray-200 shadow-lg absolute right-0 top-0 z-10 transition-transform duration-300 ease-in-out"
             style={{ 
-              width: 320,
-              transform: isDataPanelOpen ? 'translateX(0)' : 'translateX(100%)'
+              width: 400,
+              transform: isSidePanelOpen ? 'translateX(0)' : 'translateX(100%)'
             }}
           >
-            <DataPanel />
+            {/* Merged Panel Content */}
+            <div className="h-full flex flex-col">
+              {/* Workflow Section - Top 70% */}
+              <div className="flex-[7] border-b border-gray-300 min-h-0">
+                <WorkflowContainer />
+              </div>
+              
+              {/* Data Section - Bottom 30% */}
+              <div className="flex-[3] bg-white min-h-0">
+                <div className="h-full flex flex-col">
+                  <div className="px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100 flex-shrink-0">
+                    <h3 className="text-sm font-semibold text-gray-700 flex items-center">
+                      <Database className="w-4 h-4 mr-2 text-blue-600" />
+                      Data Sources
+                      {dataSources.length > 0 && (
+                        <span className="ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-full">
+                          {dataSources.length}
+                        </span>
+                      )}
+                    </h3>
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    <DataPanel />
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Floating Data Panel Toggle Button */}
+        {/* Floating Side Panel Toggle Button */}
         <Button
           variant="outline"
           size="sm"
-          className={`fixed top-20 z-30 transition-all duration-300 shadow-lg hover:shadow-xl ${
-            isDataPanelOpen 
-              ? 'right-[324px]' 
-              : 'right-2'
-          }`}
-          onClick={() => setIsDataPanelOpen(!isDataPanelOpen)}
-          title={isDataPanelOpen ? 'Hide data panel' : 'Show data panel'}
+          className="fixed top-20 z-50 transition-all duration-300 shadow-lg hover:shadow-xl"
+          style={{
+            right: isSidePanelOpen ? '404px' : '8px'
+          }}
+          onClick={() => setIsSidePanelOpen(!isSidePanelOpen)}
+          title={isSidePanelOpen ? 'Hide side panel' : 'Show side panel'}
         >
-          <Database className="w-4 h-4 mr-1" />
-          {isDataPanelOpen ? (
+          <Settings className="w-4 h-4 mr-1" />
+          {isSidePanelOpen ? (
             <ChevronRight className="w-4 h-4" />
           ) : (
             <ChevronLeft className="w-4 h-4" />
           )}
-          {!isDataPanelOpen && (
+          {!isSidePanelOpen && (
             <span className="ml-1">
-              Data ({dataSources.length})
+              Tools & Data ({dataSources.length})
             </span>
           )}
         </Button>
