@@ -1,0 +1,28 @@
+{
+  "type": "point",
+  "config": {
+    "label": "Trajectory Points",
+    "color": [255, 193, 7],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.8,
+      "radius": 10,
+      "radiusRange": [0, 50],
+      "colorRange": {
+        "name": "ColorBrewer YlOrBr-6",
+        "type": "sequential",
+        "category": "ColorBrewer",
+        "colors": ["#FFFFD4", "#FED98E", "#FE9929", "#D95F0E", "#993404", "#662506"]
+      },
+      "filled": true,
+      "outline": true,
+      "thickness": 2
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "sqrt"
+  }
+}

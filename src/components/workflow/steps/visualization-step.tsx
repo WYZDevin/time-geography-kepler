@@ -1,69 +1,108 @@
-import React, { useEffect, useState } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '../../../stores/store';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useAppDispatch, useAppSelector } from '../../../stores/store';
 import { Button } from '@/components/ui/button';
-import { resetWorkflow, setCurrentStep } from '../../../stores/workflow-slice';
-import { createUnifiedAnalysisService, UnifiedAnalysisResponse } from '../../../services/unified-analysis-service';
-import { AnalysisResult } from '../../../interfaces/tool-interfaces';
+import { resetWorkflow, setCurrentStep, addToHistory } from '../../../stores/workflow-slice';
+import { AnalysisResult, createAnalysisEngine } from '../../../services/analysis-engine';
+import { KeplerAdapter } from '../../kepler-adapter';
+import { toolRegistry } from '@/utils/tool-registry';
 
 const VisualizationStep = () => {
-    const dispatch = useDispatch();
-    const { selectedTool, uploadedData, fieldMapping, toolOptions } = useSelector((state: RootState) => state.workflow);
-    const [analysisResult, setAnalysisResult] = useState<UnifiedAnalysisResponse | null>(null);
+    const dispatch = useAppDispatch();
+    const { selectedToolId, selectedData, fieldMapping, toolOptions, executionMode } = useAppSelector(state => state.workflow);
+    const { sideLength, heightScale } = useAppSelector(state => state.metadata);
+    const selectedTool = selectedToolId ? toolRegistry.getTool(selectedToolId) : null;
+    const analysisEngine = useMemo(() => createAnalysisEngine(), []);
+    const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [showErrorDetails, setShowErrorDetails] = useState(false);
+    const hasRunAnalysis = useRef(false);
 
-    useEffect(() => {
-        console.log("VisualizationStep: selectedTool", selectedTool);
-        if (uploadedData && fieldMapping && selectedTool && toolOptions && !analysisResult) {
-            runAnalysis();
+    const keplerState = useAppSelector((state: any) => state.keplerGl.kepler);
+    const hasExistingData = useMemo(() => {
+        if (!keplerState?.visState?.datasets) return false;
+        return Object.keys(keplerState.visState.datasets).length > 0;
+    }, [keplerState]);
+
+    const [mapActionChoice, setMapActionChoice] = useState<'none' | 'pending' | 'overwrite' | 'append'>('none');
+
+    const runAnalysis = useCallback(async () => {
+        if (!selectedData || !selectedToolId) {
+            return;
         }
-    }, [uploadedData, fieldMapping, selectedTool, toolOptions, analysisResult]);
 
-    const runAnalysis = async () => {
-        if (!uploadedData || !fieldMapping || !selectedTool) return;
+        // Prevent running analysis multiple times
+        if (hasRunAnalysis.current) {
+            return;
+        }
 
+        hasRunAnalysis.current = true;
         setIsAnalyzing(true);
-        try {
-            // Create unified analysis service
-            const analysisService = createUnifiedAnalysisService(dispatch);
 
+        try {
             const request = {
-                toolId: selectedTool.id,
-                data: uploadedData,
-                fieldMapping,
-                options: toolOptions || {}
+                toolId: selectedToolId,
+                data: selectedData,
+                attributes: fieldMapping || undefined,
+                options: { ...toolOptions, sideLength, heightScale },
+                mode: executionMode || 'frontend',
             };
 
-            const result = await analysisService.executeAnalysis(request, (progress, message) => {
-                console.log(`Analysis progress: ${progress}% - ${message}`);
-            });
+            const result = await analysisEngine.execute(request);
 
             setAnalysisResult(result);
-            console.log("Analysis result:", result);
 
-            // Visualization is automatically handled by the unified service
-            if (!result.success) {
+            if (result.success) {
+                // Add to history on successful analysis
+                dispatch(addToHistory({}));
+                if (hasExistingData) {
+                    setMapActionChoice('pending');
+                } else {
+                    setMapActionChoice('overwrite');
+                }
+            } else {
                 console.error("Analysis failed:", result.error);
             }
         } catch (error) {
             console.error('Analysis execution error:', error);
-            setAnalysisResult({
+            console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+
+            const errorResult: AnalysisResult = {
                 success: false,
-                datasets: [],
+                toolId: selectedToolId,
+                outputs: [],
                 error: `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                executionTime: 0,
-                keplerActions: []
-            });
-            console.log("Error during analysis execution:", error);
+                metadata: {
+                    executionTime: 0,
+                    featureCount: 0,
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            setAnalysisResult(errorResult);
         } finally {
             setIsAnalyzing(false);
         }
-    };
+    }, [selectedData, selectedToolId, fieldMapping, toolOptions, sideLength, heightScale, analysisEngine, dispatch, hasExistingData]);
+
+    useEffect(() => {
+        if (selectedData && selectedToolId && !hasRunAnalysis.current) {
+            runAnalysis();
+        }
+    }, [selectedData, selectedToolId, runAnalysis]);
 
     const handleNewAnalysis = () => {
+        hasRunAnalysis.current = false;
+        setAnalysisResult(null);
+        setMapActionChoice('none');
         dispatch(resetWorkflow());
     };
+
+    // Reset analysis state when going back to options
+    useEffect(() => {
+        return () => {
+            hasRunAnalysis.current = false;
+        };
+    }, []);
 
     return (
         <div className="h-full flex flex-col p-6">
@@ -80,7 +119,7 @@ const VisualizationStep = () => {
                             </p>
                         </div>
                     </div>
-                    <Button 
+                    <Button
                         onClick={handleNewAnalysis}
                         variant="outline"
                         className="border-blue-300 text-blue-700 hover:bg-blue-50"
@@ -107,20 +146,15 @@ const VisualizationStep = () => {
                     <div className="bg-gray-50 p-3 rounded">
                         <div className="font-medium text-gray-700 mb-1">Processing Time</div>
                         <div className="text-gray-600">
-                            {analysisResult?.executionTime ? 
-                                `${analysisResult.executionTime}ms` : 'N/A'}
+                            {analysisResult?.metadata?.executionTime ?
+                                `${analysisResult.metadata.executionTime}ms` : 'N/A'}
                         </div>
                     </div>
                     <div className="bg-gray-50 p-3 rounded">
-                        <div className="font-medium text-gray-700 mb-1">Visualization Templates</div>
+                        <div className="font-medium text-gray-700 mb-1">Features Generated</div>
                         <div className="text-gray-600">
-                            {analysisResult?.metadata?.templatesUsed && analysisResult.metadata.templatesUsed.length > 0 ? (
-                                <span className="text-green-600">🎨 {analysisResult.metadata.templatesUsed.length} template(s)</span>
-                            ) : analysisResult?.datasets?.some(ds => ds.visualizationConfig || ds.layers) ? (
-                                <span className="text-blue-600">🔧 Custom</span>
-                            ) : (
-                                <span className="text-gray-500">Default</span>
-                            )}
+                            {analysisResult?.metadata?.featureCount ?
+                                `${analysisResult.metadata.featureCount} features` : 'N/A'}
                         </div>
                     </div>
                 </div>
@@ -128,7 +162,7 @@ const VisualizationStep = () => {
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 flex-1">
                 <h3 className="font-semibold text-gray-800 mb-4">Analysis Configuration</h3>
-                
+
                 {fieldMapping && (
                     <div className="mb-4">
                         <h4 className="font-medium text-gray-700 mb-2">Field Mapping</h4>
@@ -161,45 +195,66 @@ const VisualizationStep = () => {
                     </div>
                 )}
 
-                {analysisResult?.success && analysisResult.metadata?.templatesUsed && analysisResult.metadata.templatesUsed.length > 0 && (
+                {/* Append vs Overwrite Selection Prompt - MOVED TO TOP FOR VISIBILITY */}
+                {mapActionChoice === 'pending' && (
+                    <div className="mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center animate-in slide-in-from-bottom-2 duration-300 relative overflow-hidden">
+                        <div className="absolute top-0 w-full left-0 h-1 bg-blue-500 animate-pulse"></div>
+                        <h4 className="font-bold text-gray-900 text-xl mb-2 flex items-center justify-center">
+                            <span className="mr-2">🗺️</span> Map Action Required
+                        </h4>
+                        <p className="text-gray-700 mb-6 text-base font-medium">Your map already contains data layers. <br />Would you like to add this new analysis on top, or clear the map and start fresh?</p>
+                        <div className="flex flex-col sm:flex-row justify-center items-center space-y-3 sm:space-y-0 sm:space-x-4">
+                            <Button
+                                onClick={() => setMapActionChoice('append')}
+                                size="lg"
+                                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 shadow-md transition-all hover:scale-105"
+                            >
+                                ➕ Append to existing map
+                            </Button>
+                            <Button
+                                onClick={() => setMapActionChoice('overwrite')}
+                                variant="outline"
+                                size="lg"
+                                className="w-full sm:w-auto border-gray-400 bg-white text-gray-800 hover:bg-gray-100 font-bold px-8 shadow-sm transition-all hover:border-gray-500"
+                            >
+                                🔄 Overwrite previous map
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
+                {analysisResult?.success && (
                     <div className="mb-4">
-                        <h4 className="font-medium text-gray-700 mb-2">Visualization Details</h4>
-                        <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg border border-purple-200">
+                        <h4 className="font-medium text-gray-700 mb-2">Analysis Results</h4>
+                        <div className="bg-gradient-to-r from-green-50 to-blue-50 p-4 rounded-lg border border-green-200">
                             <div className="flex items-center mb-2">
-                                <span className="text-lg mr-2">🎨</span>
-                                <span className="font-medium text-purple-800">
-                                    Using {analysisResult.metadata.templatesUsed.length} template(s): {analysisResult.metadata.templatesUsed.join(', ')}
+                                <span className="text-lg mr-2">✅</span>
+                                <span className="font-medium text-green-800">
+                                    Analysis completed successfully
                                 </span>
                             </div>
-                            <p className="text-purple-700 text-sm">
-                                This analysis uses predefined visualization templates optimized for {selectedTool?.name} results.
+                            <p className="text-green-700 text-sm">
+                                Generated {analysisResult.outputs.length} output dataset(s) with {analysisResult.metadata.featureCount} total features.
                             </p>
                         </div>
                     </div>
                 )}
 
-                {analysisResult?.success && analysisResult.datasets && analysisResult.datasets.length > 1 && (
+                {analysisResult?.success && analysisResult.outputs && analysisResult.outputs.length > 1 && (
                     <div className="mb-4">
-                        <h4 className="font-medium text-gray-700 mb-2">Datasets Generated</h4>
+                        <h4 className="font-medium text-gray-700 mb-2">Output Datasets</h4>
                         <div className="space-y-2">
-                            {analysisResult.datasets.map((dataset) => (
-                                <div key={dataset.id} className="bg-gray-50 p-3 rounded border">
+                            {analysisResult.outputs.map((output, index) => (
+                                <div key={index} className="bg-gray-50 p-3 rounded border">
                                     <div className="flex items-center justify-between">
                                         <div>
-                                            <div className="font-medium text-gray-800">{dataset.name}</div>
-                                            {dataset.description && (
-                                                <div className="text-sm text-gray-600">{dataset.description}</div>
-                                            )}
+                                            <div className="font-medium text-gray-800">Dataset {index + 1}</div>
+                                            <div className="text-sm text-gray-600">GeoJSON FeatureCollection</div>
                                         </div>
                                         <div className="text-sm text-gray-500">
-                                            {dataset.data.features.length} features
+                                            {output.features.length} features
                                         </div>
                                     </div>
-                                    {dataset.templateId && (
-                                        <div className="mt-2 text-xs text-purple-600">
-                                            Template: {dataset.templateId}
-                                        </div>
-                                    )}
                                 </div>
                             ))}
                         </div>
@@ -210,30 +265,22 @@ const VisualizationStep = () => {
                     <div className="mb-4">
                         <h4 className="font-medium text-gray-700 mb-2">Results Summary</h4>
                         <div className="space-y-2 text-sm">
-                            {analysisResult.metadata.totalDatasets && (
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">Datasets Generated:</span>
-                                    <span className="font-medium">{analysisResult.metadata.totalDatasets}</span>
-                                </div>
-                            )}
-                            {analysisResult.metadata.processedFeatures && (
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">Features Processed:</span>
-                                    <span className="font-medium">{analysisResult.metadata.processedFeatures}</span>
-                                </div>
-                            )}
-                            {analysisResult.metadata.totalFeatures && (
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">Total Features:</span>
-                                    <span className="font-medium">{analysisResult.metadata.totalFeatures}</span>
-                                </div>
-                            )}
-                            {analysisResult.metadata.stayPointsDetected !== undefined && (
-                                <div className="flex justify-between">
-                                    <span className="text-gray-600">Stay Points Detected:</span>
-                                    <span className="font-medium">{analysisResult.metadata.stayPointsDetected}</span>
-                                </div>
-                            )}
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Output Datasets:</span>
+                                <span className="font-medium">{analysisResult.outputs.length}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Total Features:</span>
+                                <span className="font-medium">{analysisResult.metadata.featureCount}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Execution Time:</span>
+                                <span className="font-medium">{analysisResult.metadata.executionTime}ms</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Completed At:</span>
+                                <span className="font-medium">{new Date(analysisResult.metadata.timestamp).toLocaleTimeString()}</span>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -277,7 +324,7 @@ const VisualizationStep = () => {
                                     <p className="font-medium mb-1">Troubleshooting steps:</p>
                                     <ul className="list-disc list-inside space-y-1">
                                         {analysisResult.error.toLowerCase().includes('field') && (
-                                            <li className="text-red-700">🔹 <strong>Field issue detected:</strong> Check that your data contains the required fields ({selectedTool?.requiredFields.join(', ')})</li>
+                                            <li className="text-red-700">🔹 <strong>Field issue detected:</strong> Check that your data contains the required fields</li>
                                         )}
                                         {analysisResult.error.toLowerCase().includes('time') && (
                                             <li className="text-red-700">🔹 <strong>Time issue detected:</strong> Verify that time values are in a valid date/time format (e.g., ISO 8601)</li>
@@ -296,7 +343,7 @@ const VisualizationStep = () => {
                             </div>
                         </div>
                         <div className="mt-4 flex space-x-3">
-                            <Button 
+                            <Button
                                 onClick={handleNewAnalysis}
                                 size="sm"
                                 variant="outline"
@@ -304,11 +351,13 @@ const VisualizationStep = () => {
                             >
                                 Try New Analysis
                             </Button>
-                            <Button 
+                            <Button
                                 onClick={() => {
                                     // Reset analysis result and go back to field mapping
+                                    hasRunAnalysis.current = false;
                                     setAnalysisResult(null);
-                                    dispatch(setCurrentStep('field-mapping'));
+                                    setMapActionChoice('none');
+                                    dispatch(setCurrentStep('options'));
                                 }}
                                 size="sm"
                                 variant="ghost"
@@ -326,7 +375,6 @@ const VisualizationStep = () => {
                         <h4 className="font-medium text-blue-800 mb-2">Analysis Complete</h4>
                         <p className="text-blue-700 text-sm">
                             Your data has been processed and is now visible on the map. Use the map controls to explore your analysis results.
-                            {analysisResult?.datasets?.some(ds => ds.visualizationConfig || ds.templateId) && ' The visualization uses optimized templates for enhanced display.'}
                         </p>
                     </div>
                 )}
@@ -348,6 +396,15 @@ const VisualizationStep = () => {
                     </div>
                 )}
             </div>
+
+            {/* Kepler Adapter handles visualization separately from analysis logic */}
+            {(mapActionChoice === 'append' || mapActionChoice === 'overwrite') && (
+                <KeplerAdapter
+                    result={analysisResult}
+                    appendMode={mapActionChoice === 'append'}
+                    onVisualizationComplete={() => { }}
+                />
+            )}
         </div>
     );
 };

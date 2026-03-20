@@ -1,0 +1,1 @@
+Key dirs: src/components (UI: data-panel, toolbox, workflow), src/services (analysis-engine, visualization-service), src/tools (analysis tool implementations), src/stores (Redux slices), src/utils (field-auto-detection, tool registry, constants), src/visualization-templates (kepler configs). Additional config in root (Vite, Tailwind).

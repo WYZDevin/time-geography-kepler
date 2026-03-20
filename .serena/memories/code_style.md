@@ -1,0 +1,1 @@
+TypeScript + React project using Vite. ESLint extends @eslint/js and typescript-eslint recommended configs plus react-hooks/react-refresh plugins. Follow functional React components with hooks and TypeScript typing. Tailwind CSS and shadcn/ui for styling. Keep code type-safe and leverage tool/service architecture described in README.

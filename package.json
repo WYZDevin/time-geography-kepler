@@ -23,12 +23,15 @@
     "@tensorflow/tfjs-node": "^4.22.0",
     "@turf/turf": "^7.2.0",
     "@types/uuid": "^10.0.0",
+    "assert": "^2.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.0",
     "fs": "^0.0.1-security",
     "kepler.gl": "^3.1.8",
     "lucide-react": "^0.477.0",
+    "papaparse": "^5.5.3",
+    "process": "^0.11.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-dropzone": "^14.3.8",
@@ -39,12 +42,14 @@
     "tailwindcss-animate": "^1.0.7",
     "ts-node": "^10.9.2",
     "turf": "^3.0.14",
+    "util": "^0.12.5",
     "uuid": "^11.1.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
     "@types/node": "^22.13.5",
+    "@types/papaparse": "^5.3.16",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react-swc": "^3.8.0",
@@ -58,5 +63,8 @@
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.24.1",
     "vite": "^6.2.0"
+  },
+  "volta": {
+    "node": "24.5.0"
   }
 }

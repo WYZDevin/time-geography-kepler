@@ -1,0 +1,20 @@
+{
+  "type": "line",
+  "config": {
+    "label": "3D Trajectory",
+    "color": [99, 179, 237],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.8,
+      "thickness": 3,
+      "colorRange": {
+        "name": "Ice and Fire",
+        "type": "diverging",
+        "category": "Uber",
+        "colors": ["#0198BD", "#49E3CE", "#E8FEB5", "#FEEDB2", "#FEAD54", "#D50255"]
+      },
+      "elevationScale": 100,
+      "enable3d": true
+    }
+  }
+}

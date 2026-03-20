@@ -1,0 +1,33 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Time Geography Analysis",
+    "color": [255, 106, 106],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.6,
+      "strokeOpacity": 0.9,
+      "thickness": 2,
+      "strokeColor": [255, 50, 50],
+      "colorRange": {
+        "name": "ColorBrewer YlOrRd-6",
+        "type": "sequential",
+        "category": "ColorBrewer",
+        "colors": ["#FFFFB2", "#FED976", "#FEB24C", "#FD8D3C", "#FC4E2A", "#E31A1C"]
+      },
+      "filled": true,
+      "enable3d": false,
+      "stroked": true,
+      "wireframe": false,
+      "elevationScale": 1
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "linear",
+    "heightField": null,
+    "heightScale": "linear"
+  }
+}

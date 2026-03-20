@@ -1,0 +1,16 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Analysis Result",
+    "color": [0, 92, 255],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.8,
+      "strokeOpacity": 0.8,
+      "thickness": 2,
+      "filled": true,
+      "enable3d": false,
+      "stroked": true
+    }
+  }
+}

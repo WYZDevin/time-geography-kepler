@@ -1,15 +1,20 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useDispatch } from 'react-redux';
-import { AppDispatch } from '../stores/store';
-import { DataService, createDataService } from '../services/data-service';
+import { AnalysisEngine, createAnalysisEngine } from '../services/analysis-engine';
+import { VisualizationService, createVisualizationService } from '../services/visualization-service';
+// Import tools to trigger auto-initialization
+console.log('AppContext: About to import tools module...');
+import '../tools';
+console.log('AppContext: Tools module imported');
 
 interface AppContextType {
-  dataService: DataService | null;
+  analysisEngine: AnalysisEngine | null; // Pure analysis
+  visualizationService: VisualizationService | null; // Pure visualization
   isInitialized: boolean;
 }
 
 const AppContext = createContext<AppContextType>({
-  dataService: null,
+  analysisEngine: null,
+  visualizationService: null,
   isInitialized: false,
 });
 
@@ -26,9 +31,9 @@ interface AppProviderProps {
 }
 
 export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
-  const dispatch = useDispatch();
   const [services, setServices] = useState<AppContextType>({
-    dataService: null,
+    analysisEngine: null,
+    visualizationService: null,
     isInitialized: false,
   });
 
@@ -37,16 +42,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       try {
         console.log('Initializing application services...');
 
-        // Initialize data service
-        const dataService = createDataService(dispatch);
-        console.log('✓ Data service initialized');
+        // Initialize pure analysis engine
+        const analysisEngine = createAnalysisEngine();
+        console.log('✓ Analysis engine initialized');
+
+        // Initialize visualization service
+        const visualizationService = createVisualizationService();
+        console.log('✓ Visualization service initialized');
 
         // Tools are auto-initialized by /src/tools/index.ts
-        // Analysis is handled by UnifiedAnalysisService
-        console.log('✓ Services ready (tools auto-initialized, analysis handled by UnifiedAnalysisService)');
+        console.log('✓ Services ready (tools auto-initialized)');
 
         setServices({
-          dataService,
+          analysisEngine,
+          visualizationService,
           isInitialized: true,
         });
 
@@ -59,7 +68,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     };
 
     initializeServices();
-  }, [dispatch]);
+  }, []);
 
   return (
     <AppContext.Provider value={services}>
@@ -68,11 +77,22 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   );
 };
 
-// Hook for accessing data service
-export const useDataService = () => {
-  const { dataService } = useAppContext();
-  if (!dataService) {
-    throw new Error('DataService not available. Make sure AppProvider is initialized.');
+// DataService is removed - use Redux directly via useAppDispatch/useAppSelector
+
+// Hook for accessing pure analysis engine
+export const useAnalysisEngine = () => {
+  const { analysisEngine } = useAppContext();
+  if (!analysisEngine) {
+    throw new Error('AnalysisEngine not available. Make sure AppProvider is initialized.');
   }
-  return dataService;
+  return analysisEngine;
+};
+
+// Hook for accessing visualization service
+export const useVisualizationService = () => {
+  const { visualizationService } = useAppContext();
+  if (!visualizationService) {
+    throw new Error('VisualizationService not available. Make sure AppProvider is initialized.');
+  }
+  return visualizationService;
 };

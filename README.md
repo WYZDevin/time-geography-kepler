@@ -129,26 +129,79 @@ toolManager.registerTool(new MyCustomTool());
 - Tailwind CSS for styling
 - Fully customizable themes
 
-## 🏛️ Architecture Improvements
+## 🏛️ Architecture
 
-### From Previous Version
-- **Data-Centric**: Moved from workflow-centric to data-centric architecture
-- **Service Layer**: Added comprehensive service layer for business logic
-- **State Management**: Improved Redux structure with specialized slices
-- **Tool System**: Enhanced tool architecture with better validation and execution
-- **UI/UX**: Modern, responsive interface with better data management
+### Core Architecture Principles
+- **Frontend-Only Design**: Simplified deployment with all processing done client-side
+- **Tool-Based System**: Extensible SimpleTool interface for analysis plugins
+- **Redux State Management**: Centralized state with specialized slices (data, workflow, metadata, progress)
+- **Visualization Templates**: JSON-based Kepler.gl layer configurations
+- **Type-Safe Development**: Comprehensive TypeScript interfaces throughout
+
+### Code Organization
+```
+src/
+├── components/        # React UI components
+│   ├── data-panel/    # Data source management
+│   ├── toolbox/       # Tool selection
+│   └── workflow/      # Analysis workflow steps
+├── contexts/          # React contexts
+├── interfaces/        # TypeScript type definitions
+├── services/          # Business logic layer
+│   ├── analysis-engine.ts
+│   └── visualization-service.ts
+├── stores/            # Redux state slices
+├── tools/             # Analysis tool implementations
+├── utils/             # Utility functions
+│   ├── field-auto-detection.ts
+│   ├── tool-registry.ts
+│   ├── data-utils.ts
+│   └── constants.tsx
+└── visualization-templates/  # Kepler.gl configs
+```
+
+### Recent Architectural Improvements (Phase 2)
+- ✅ **Standardized Tool Interface**: All tools implement SimpleTool with getOptionSchema()
+- ✅ **Removed Legacy Code**: Eliminated 500+ lines of unused data processors and hardcoded configs
+- ✅ **Clean Utils Structure**: Focused, single-responsibility utility modules
+- ✅ **Zero TypeScript Errors**: Full type safety across the codebase
+- ✅ **Frontend-Only Architecture**: Removed backend abstraction layer for simplified deployment
+
+### Frontend-Only Processing
+
+This platform is **100% client-side** - all data processing and analysis runs directly in your browser:
+
+**Benefits:**
+- ✅ **Privacy First**: Your data never leaves your computer
+- ✅ **Zero Setup**: No server infrastructure required
+- ✅ **Instant Deploy**: Host on any static file server (Vercel, Netlify, GitHub Pages)
+- ✅ **Offline Capable**: Works without internet connection (after initial load)
+- ✅ **Cost Effective**: No server costs, scales infinitely
+
+**Trade-offs:**
+- ⚠️ **Performance**: Large datasets (>100k features) may be slow on older devices
+- ⚠️ **Memory Limits**: Browser memory constraints apply
+- ⚠️ **No Persistence**: Data cleared when you close the browser (localStorage planned)
+
+**Future Backend Integration:**
+While the platform is frontend-only today, the architecture supports optional backend processing for:
+- Heavy computational workloads
+- Dataset storage and sharing
+- Real-time collaboration
+See [BACKEND.md](./BACKEND.md) for the integration design.
 
 ### Performance Optimizations
 - Data caching and memoization
 - Lazy loading of components
 - Efficient state updates
 - Progress tracking for long operations
+- Client-side analysis keeps data local (no network overhead)
 
 ### Scalability Features
-- Plugin architecture for tools
-- Extensible data source types
-- Configurable visualization templates
-- Modular component system
+- Plugin architecture for tools via SimpleTool interface
+- Extensible data source types (GeoJSON, CSV planned)
+- JSON-based visualization templates for easy customization
+- Modular component system with clear boundaries
 
 ## 📈 Future Enhancements
 

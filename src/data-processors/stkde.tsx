@@ -1,8 +1,9 @@
-import { selectSideLength } from '@/stores/metadata-slice';
-import store from '@/stores/store';
 import { PROCESSED_HEIGHT_FIELD } from '@/utils/constants';
+import { ToolUtils } from '@/tools/tool-utils';
 import * as tf from '@tensorflow/tfjs';
 import * as turf from '@turf/turf';
+
+export const STKDE_Z_AXIS_FIELD = 'z_axis';
 
 export interface STKDEResult {
   density: number[][][] | number[][];  // 3D if multiple time slices; 2D if single
@@ -33,10 +34,7 @@ export async function tf_stkde(
   cell_size?: number,
   n_time_slices: number = 10
 ): Promise<STKDEResult> {
-  // Check WebGL memory before starting
-  const memInfo = tf.memory();
-  console.log('TensorFlow.js memory before STKDE:', memInfo);
-  
+
   // Limit grid size to prevent WebGL issues
   const MAX_GRID_CELLS = 2500; // 50x50 max grid
   // --- Data Extraction ---
@@ -121,7 +119,7 @@ export async function tf_stkde(
   }
   let n_cols = Math.ceil((x_max - x_min) / cell_size);
   let n_rows = Math.ceil((y_max - y_min) / cell_size);
-  
+
   // Limit grid size to prevent WebGL framebuffer errors
   const totalCells = n_cols * n_rows;
   if (totalCells > MAX_GRID_CELLS) {
@@ -132,7 +130,7 @@ export async function tf_stkde(
     // Recalculate cell_size based on new grid dimensions
     cell_size = Math.max((x_max - x_min) / n_cols, (y_max - y_min) / n_rows);
   }
-  
+
   x_max = x_min + n_cols * cell_size;
   y_max = y_min + n_rows * cell_size;
 
@@ -339,9 +337,6 @@ export async function classifyByQuantile(
     thresholds[lvl] = thresh;
     threshTensor.dispose();
   }
-  // // For debugging (prints out computed thresholds):
-  console.log(thresholds[0.9], thresholds[0.975], thresholds[0.99]);
-
   // Begin with a tensor of zeros (category 0).
   let classification = tf.zerosLike(densitySlice);
 
@@ -400,6 +395,39 @@ export interface ClassificationResults {
   thresholdsAll: { [key: number]: number }[];
 }
 
+function computeSideLengthAndHeight(
+  X: number[][],
+  Y: number[][]
+): { sideLength: number; cellHeight: number; totalHeight: number } {
+
+  const flatX = X.flat();
+  const flatY = Y.flat();
+
+  if (!flatX.length || !flatY.length) {
+    return { sideLength: 1, cellHeight: 100, totalHeight: 1000 };
+  }
+
+  const spatialExtent = Math.max(
+    (Math.max(...flatX) - Math.min(...flatX)),
+    (Math.max(...flatY) - Math.min(...flatY)),
+    Number.EPSILON
+  );
+
+  // Calculate unified peak altitude shared across all 3D modules
+  const minLng = Math.min(...flatX);
+  const maxLng = Math.max(...flatX);
+  const minLat = Math.min(...flatY);
+  const maxLat = Math.max(...flatY);
+
+  const TOTAL_HEIGHT_METERS = ToolUtils.calculateOptimalZAxisHeight(minLng, maxLng, minLat, maxLat);
+
+  const effectiveSlices = 10; // Default STKDE slices
+  const cellHeight = TOTAL_HEIGHT_METERS / effectiveSlices;
+  const sideLength = spatialExtent;
+
+  return { sideLength, cellHeight, totalHeight: TOTAL_HEIGHT_METERS };
+}
+
 /**
  * Example usage of the classification function.
  *
@@ -449,25 +477,9 @@ export async function classifyKDE(
   // Optionally, convert the classification slices to JavaScript arrays for further use or plotting.
   const classificationSlicesArrays = await Promise.all(classificationSlices.map((cs) => cs.array()));
 
-  // Log the number of 0, 1, 2, 3 in the classification slices arrays
-  const zeroCount = classificationSlicesArrays.flat().flat().filter((x: number) => x === 0).length;
-  const oneCount = classificationSlicesArrays.flat().flat().filter((x: number) => x === 1).length;
-  const twoCount = classificationSlicesArrays.flat().flat().filter((x: number) => x === 2).length;
-  const threeCount = classificationSlicesArrays.flat().flat().filter((x: number) => x === 3).length;
-  console.log("Number of 0s:", zeroCount);
-  console.log("Number of 1s:", oneCount);
-  console.log("Number of 2s:", twoCount);
-  console.log("Number of 3s:", threeCount);
-
-  // console.log("Meshgrid X:", X);
-  // console.log("Meshgrid Y:", Y);
-  // console.log("Time numeric values:", time_nums);
-  // console.log("Classification slices arrays:", classificationSlicesArrays);
-  // console.log("Thresholds for each slice:", thresholdsAll);
-
   // Dispose of the classification slice tensors if no longer needed.
   classificationSlices.forEach((cs) => cs.dispose());
-  
+
   // Clean up density tensor if it was created here
   if (density.rank === 2 && density3D !== density) {
     density3D.dispose();
@@ -500,93 +512,68 @@ export function createClassificationGeoJSON(
   X: number[][],
   Y: number[][],
   classificationSlices: number[][][],
-  cell_size: number
+  cellSize: number,
+  timeNums: number[]
 ): FeatureCollection[] {
-  const sideLength = selectSideLength(store.getState());
-  const n_time_slices = classificationSlices.length;
-  const cell_size_meters = sideLength / n_time_slices;
+  const timeSliceCount = classificationSlices.length;
+  const { sideLength, cellHeight } = computeSideLengthAndHeight(X, Y);
 
-  const n_rows = X.length;
-  const n_cols = X[0].length;
-  const totalCells = n_rows * n_cols;
+  const rowCount = X.length;
+  const columnCount = rowCount > 0 ? X[0].length : 0;
 
-  // Flatten the meshgrid arrays.
-  const flatX = X.flat();
-  const flatY = Y.flat();
+  const featuresByClassification: Feature<Polygon>[][] = [[], [], [], []];
 
-  // Replicate X and Y for each time slice.
-  let all_X: number[] = [];
-  let all_Y: number[] = [];
-  for (let t = 0; t < n_time_slices; t++) {
-    all_X = all_X.concat(flatX);
-    all_Y = all_Y.concat(flatY);
-  }
+  for (let t = 0; t < timeSliceCount; t++) {
+    const zBase = t * cellHeight;
+    const timeValueMs = timeNums[t] ?? timeNums[timeNums.length - 1] ?? 0;
+    const timeValueIso = new Date(timeValueMs).toISOString();
 
-  // Shuffle each x and y by adding a very small random number.
-  all_X = all_X.map(x => x + Math.random() * 0.000001);
-  all_Y = all_Y.map(y => y + Math.random() * 0.000001);
-
-  // Create all_Z: for each time slice, use a constant value based on the time slice index.
-  // In Python, they used: np.full_like(X.flatten(), i) * cell_size_meters * 0.95 for i in range(1, len(time_values)+1)
-
-  let all_Z: number[] = [];
-  for (let t = 0; t < n_time_slices; t++) {
-    const zVal = (t) * cell_size_meters * 1;
-    const zArray = new Array(totalCells).fill(zVal);
-    all_Z = all_Z.concat(zArray);
-  }
-
-  // Flatten the 3D classification array into a 1D array.
-  let flatClassification: number[] = [];
-  for (let t = 0; t < n_time_slices; t++) {
-    flatClassification = flatClassification.concat(classificationSlices[t].flat());
-  }
-
-  // Build GeoJSON features only for cells where classification > 0.
-  const featuresByClassification: Feature<Polygon>[][] = [];
-  for (let i = 0; i < 4; i++) {
-    featuresByClassification.push([]);
-  }
-
-  for (let i = 0; i < flatClassification.length; i++) {
-    if (flatClassification[i] > 0) {
-      const x = all_X[i];
-      const y = all_Y[i];
-      const z = all_Z[i];
-      // Create a square polygon from the centroid.
-      // Using a "buffer" with cap_style 'square' is emulated here by manually computing the vertices.
-      // The square extends cell_size units in all directions from the centroid.
-      const squareCoords = [
-        [x - cell_size / 2, y - cell_size / 2, z],
-        [x + cell_size / 2, y - cell_size / 2, z],
-        [x + cell_size / 2, y + cell_size / 2, z],
-        [x - cell_size / 2, y + cell_size / 2, z],
-        [x - cell_size / 2, y - cell_size / 2, z] // close the polygon
-      ];
-
-      const feature: Feature<Polygon> = {
-        type: "Feature",
-        geometry: {
-          type: "Polygon",
-          coordinates: [squareCoords]
-        },
-        properties: {
-          classification: flatClassification[i],
-          z: z,
-          [PROCESSED_HEIGHT_FIELD]: cell_size_meters * 1
+    for (let row = 0; row < rowCount; row++) {
+      for (let col = 0; col < columnCount; col++) {
+        const classification = classificationSlices[t]?.[row]?.[col] ?? 0;
+        if (classification <= 0 || classification >= featuresByClassification.length) {
+          continue;
         }
-      };
-      featuresByClassification[flatClassification[i]].push(feature);
+
+        const x = X[row][col];
+        const y = Y[row][col];
+
+        const squareCoords = [
+          [x - cellSize / 2, y - cellSize / 2, zBase],
+          [x + cellSize / 2, y - cellSize / 2, zBase],
+          [x + cellSize / 2, y + cellSize / 2, zBase],
+          [x - cellSize / 2, y + cellSize / 2, zBase],
+          [x - cellSize / 2, y - cellSize / 2, zBase]
+        ];
+
+        const feature: Feature<Polygon> = {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [squareCoords]
+          },
+          properties: {
+            classification,
+            z: zBase,
+            [STKDE_Z_AXIS_FIELD]: zBase,
+            time_slice_index: t,
+            time_value: timeValueIso,
+            [PROCESSED_HEIGHT_FIELD]: cellHeight,
+            side_length: sideLength
+          }
+        };
+
+        featuresByClassification[classification].push(feature);
+      }
     }
   }
-  // Build and return the FeatureCollection.
+
   const featureCollections: FeatureCollection[] = [];
-  for (let i = 1; i < 4; i++) {
-    const collection: FeatureCollection = {
-      type: "FeatureCollection",
-      features: featuresByClassification[i]
-    };
-    featureCollections.push(collection);
+  for (let classification = 1; classification < featuresByClassification.length; classification++) {
+    featureCollections.push({
+      type: 'FeatureCollection',
+      features: featuresByClassification[classification]
+    });
   }
 
   return featureCollections;
@@ -609,54 +596,49 @@ export async function createSTKDE(
   temporal_bandwidth?: number,
   cell_size?: number,
   n_time_slices: number = 24
-): Promise<GeoJSON.FeatureCollection[]> {
+): Promise<{ features: GeoJSON.FeatureCollection[]; timeNums: number[] }> {
   try {
-    // Check available memory before starting
-    const initialMemory = tf.memory();
-    console.log('Initial TensorFlow.js memory:', initialMemory);
-    
-    if (initialMemory.numTensors > 100) {
-      console.warn('High tensor count detected, cleaning up...');
-      // tf.disposeVariables();
-    }
-
     // 1. Compute the STKDE result.
     const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
 
-  // 2. Convert the density output to a tf.Tensor3D.
-  let densityTensor: tf.Tensor3D;
-  if (Array.isArray(stkdeResult.density)) {
-    // Check if density is 2D or 3D.
-    if (!Array.isArray((stkdeResult.density as any)[0][0])) {
-      // It is a 2D array: expand dims.
-      densityTensor = tf.tensor2d(stkdeResult.density as number[][]).expandDims(0) as tf.Tensor3D;
+    // 2. Convert the density output to a tf.Tensor3D.
+    let densityTensor: tf.Tensor3D;
+    if (Array.isArray(stkdeResult.density)) {
+      // Check if density is 2D or 3D.
+      if (!Array.isArray((stkdeResult.density as any)[0][0])) {
+        // It is a 2D array: expand dims.
+        densityTensor = tf.tensor2d(stkdeResult.density as number[][]).expandDims(0) as tf.Tensor3D;
+      } else {
+        densityTensor = tf.tensor3d(stkdeResult.density as number[][][]);
+      }
     } else {
-      densityTensor = tf.tensor3d(stkdeResult.density as number[][][]);
+      throw new Error("Invalid density format");
     }
-  } else {
-    throw new Error("Invalid density format");
-  }
 
-  // 3. Classify the density slices.
-  const classificationResults = await classifyKDE(
-    densityTensor,
-    stkdeResult.x_centers,
-    stkdeResult.y_centers,
-    stkdeResult.time_values
-  );
+    // 3. Classify the density slices.
+    const classificationResults = await classifyKDE(
+      densityTensor,
+      stkdeResult.x_centers,
+      stkdeResult.y_centers,
+      stkdeResult.time_values
+    );
 
-  // 4. Create the GeoJSON FeatureCollection.
-  const densityFeatures = createClassificationGeoJSON(
-    classificationResults.X,
-    classificationResults.Y,
-    classificationResults.classificationSlicesArrays,
-    stkdeResult.cell_size
-  );
+    // 4. Create the GeoJSON FeatureCollection.
+    const densityFeatures = createClassificationGeoJSON(
+      classificationResults.X,
+      classificationResults.Y,
+      classificationResults.classificationSlicesArrays,
+      stkdeResult.cell_size,
+      classificationResults.time_nums
+    );
 
-  // Clean up the density tensor
-  densityTensor.dispose();
-  
-  return densityFeatures;
+    // Clean up the density tensor
+    densityTensor.dispose();
+
+    return {
+      features: densityFeatures,
+      timeNums: classificationResults.time_nums
+    };
   } catch (error) {
     console.error('Error in stkde_analysis:', error);
     throw error;

@@ -1,35 +1,40 @@
-import { BaseTool, ToolRegistry } from '../interfaces/tool-interfaces';
+import { SimpleTool } from '../interfaces/simple-tool';
 
-class ToolRegistryImpl implements ToolRegistry {
-    private tools: Map<string, BaseTool> = new Map();
+export interface SimpleToolRegistry {
+    register(tool: SimpleTool): void;
+    unregister(toolId: string): void;
+    getTool(toolId: string): SimpleTool | undefined;
+    getAllTools(): SimpleTool[];
+    getToolsByCategory(category: string): SimpleTool[];
+}
 
-    register(tool: BaseTool): void {
+class ToolRegistryImpl implements SimpleToolRegistry {
+    private tools: Map<string, SimpleTool> = new Map();
+
+    register(tool: SimpleTool): void {
         if (this.tools.has(tool.id)) {
             console.warn(`Tool with id "${tool.id}" is already registered. Overwriting...`);
         }
         this.tools.set(tool.id, tool);
-        console.log(`Tool "${tool.name}" (${tool.id}) registered successfully`);
     }
 
     unregister(toolId: string): void {
         if (this.tools.has(toolId)) {
-            const tool = this.tools.get(toolId);
             this.tools.delete(toolId);
-            console.log(`Tool "${tool?.name}" (${toolId}) unregistered`);
         } else {
             console.warn(`Tool with id "${toolId}" not found for unregistration`);
         }
     }
 
-    getTool(toolId: string): BaseTool | undefined {
+    getTool(toolId: string): SimpleTool | undefined {
         return this.tools.get(toolId);
     }
 
-    getAllTools(): BaseTool[] {
+    getAllTools(): SimpleTool[] {
         return Array.from(this.tools.values());
     }
 
-    getToolsByCategory(category: string): BaseTool[] {
+    getToolsByCategory(category: string): SimpleTool[] {
         return this.getAllTools().filter(tool => tool.category === category);
     }
 
@@ -48,7 +53,6 @@ class ToolRegistryImpl implements ToolRegistry {
 
     clear(): void {
         this.tools.clear();
-        console.log('All tools unregistered');
     }
 }
 
@@ -56,4 +60,4 @@ class ToolRegistryImpl implements ToolRegistry {
 export const toolRegistry = new ToolRegistryImpl();
 
 // Export the registry type for dependency injection
-export type { ToolRegistry }; 
+ 

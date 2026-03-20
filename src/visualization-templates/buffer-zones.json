@@ -1,0 +1,30 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Buffer Zones",
+    "color": [130, 154, 227],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.4,
+      "strokeOpacity": 0.8,
+      "thickness": 2,
+      "strokeColor": [255, 255, 255],
+      "colorRange": {
+        "name": "Global Warming",
+        "type": "sequential",
+        "category": "Uber",
+        "colors": ["#5A1846", "#900C3F", "#C70039", "#E3611C", "#F1920E", "#FFC300"]
+      },
+      "filled": true,
+      "enable3d": false,
+      "stroked": true,
+      "wireframe": false
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "linear"
+  }
+}

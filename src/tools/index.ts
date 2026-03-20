@@ -1,30 +1,31 @@
 import { toolRegistry } from '../utils/tool-registry';
 import { TimeGeographyTool } from './time-geography-tool';
-import { StayPointsTool } from './stay-points-tool';
+import { BufferTool } from './buffer-tool';
+import { IntersectionTool } from './intersection-tool';
+import { UnionTool } from './union-tool';
 import { STKDETool } from './stkde-tool';
-import { PotentialPathEstimationTool } from './potential-path-estimation-tool';
 import { SpaceTimeCubeTool } from './space-time-cube-tool';
 
-// Import all tool implementations
+// Import all SimpleTool implementations
 const availableTools = [
+    // Space-Time Analysis Tools
     new TimeGeographyTool(),
-    new StayPointsTool(), 
     new STKDETool(),
-    new PotentialPathEstimationTool(),
     new SpaceTimeCubeTool(),
-    // new TemporalAggregationTool(),
-    // new SpatialClusteringTool(),
+
+    // Spatial Analysis Tools
+    new BufferTool(),
+    new IntersectionTool(),
+    new UnionTool(),
 ];
 
 /**
  * Initialize and register all available tools
  */
 export function initializeTools(): void {
-    console.log('Initializing analysis tools...');
-    
     // Clear existing tools
     toolRegistry.clear();
-    
+
     // Register all tools
     availableTools.forEach(tool => {
         try {
@@ -33,8 +34,7 @@ export function initializeTools(): void {
             console.error(`Failed to register tool ${tool.id}:`, error);
         }
     });
-    
-    console.log(`Successfully registered ${toolRegistry.getToolCount()} tools`);
+
 }
 
 /**
@@ -62,4 +62,5 @@ export function getTool(toolId: string) {
 export { toolRegistry } from '../utils/tool-registry';
 
 // Auto-initialize tools when this module is imported
-initializeTools(); 
+initializeTools();
+// Force HMR 12

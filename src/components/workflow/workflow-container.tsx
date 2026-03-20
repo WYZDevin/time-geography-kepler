@@ -1,18 +1,28 @@
 import React from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../stores/store';
-import { goBackStep, resetWorkflow } from '../../stores/workflow-slice';
+import { goBackStep, resetWorkflow, setCurrentStep } from '../../stores/workflow-slice';
 import ToolSelector from '../toolbox/tool-selector';
-import DataUploadStep from './steps/data-upload-step';
-import FieldMappingStep from './steps/field-mapping-step';
-import ToolOptionsStep from './steps/tool-options-step';
+import UnifiedToolOptionsStep from './steps/unified-tool-options-step';
 import VisualizationStep from './steps/visualization-step';
+import WorkflowStepper from './workflow-stepper';
+import WorkflowHistoryPanel from './workflow-history-panel';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Home } from 'lucide-react';
+import { ArrowLeft, Home, ChevronUp, Settings } from 'lucide-react';
+import { toolRegistry } from '@/utils/tool-registry';
 
-const WorkflowContainer = () => {
+interface WorkflowContainerProps {
+    onCollapse?: () => void;
+    isCollapsible?: boolean;
+}
+
+const WorkflowContainer: React.FC<WorkflowContainerProps> = ({
+    onCollapse,
+    isCollapsible = false
+}) => {
     const dispatch = useDispatch();
-    const { currentStep, selectedTool } = useSelector((state: RootState) => state.workflow);
+    const { currentStep, selectedToolId } = useSelector((state: RootState) => state.workflow);
+    const selectedTool = selectedToolId ? toolRegistry.getTool(selectedToolId) : null;
 
     const handleGoBack = () => {
         dispatch(goBackStep());
@@ -22,16 +32,16 @@ const WorkflowContainer = () => {
         dispatch(resetWorkflow());
     };
 
+    const handleStepClick = (step: 'tool-selection' | 'options' | 'visualization') => {
+        dispatch(setCurrentStep(step));
+    };
+
     const renderStepContent = () => {
         switch (currentStep) {
             case 'tool-selection':
                 return <ToolSelector />;
-            case 'data-upload':
-                return <DataUploadStep />;
-            case 'field-mapping':
-                return <FieldMappingStep />;
             case 'options':
-                return <ToolOptionsStep />;
+                return <UnifiedToolOptionsStep />;
             case 'visualization':
                 return <VisualizationStep />;
             default:
@@ -43,12 +53,8 @@ const WorkflowContainer = () => {
         switch (currentStep) {
             case 'tool-selection':
                 return 'Tool Selection';
-            case 'data-upload':
-                return 'Upload Data';
-            case 'field-mapping':
-                return 'Map Fields';
             case 'options':
-                return 'Configure Options';
+                return 'Configure Tool';
             case 'visualization':
                 return 'Visualization';
             default:
@@ -61,8 +67,17 @@ const WorkflowContainer = () => {
 
     return (
         <div className="h-full flex flex-col">
+            {/* Workflow Stepper */}
+            <WorkflowStepper
+                currentStep={currentStep}
+                onStepClick={handleStepClick}
+            />
+
+            {/* Workflow History Panel */}
+            <WorkflowHistoryPanel />
+
             {showNavigation && (
-                <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-200 px-6 py-4 flex items-center justify-between">
                     <div className="flex items-center space-x-4">
                         {!isToolComplete ? (
                             <Button 
@@ -100,15 +115,54 @@ const WorkflowContainer = () => {
                     </div>
                     <div className="flex items-center space-x-4">
                         {selectedTool && (
-                            <div className="flex items-center space-x-2">
-                                <span className="text-lg">{selectedTool.icon}</span>
-                                <span className="font-medium text-gray-700">{selectedTool.name}</span>
+                            <div className="flex flex-col">
+                                <div className="flex items-center space-x-2">
+                                    <span className="text-lg">{selectedTool.icon}</span>
+                                    <span className="font-medium text-gray-700">{selectedTool.name}</span>
+                                </div>
+                                <div className="text-xs text-gray-500 ml-6">
+                                    Step: {getStepTitle()}
+                                </div>
                             </div>
                         )}
-                        <div className="text-sm text-gray-500">
-                            Step: {getStepTitle()}
-                        </div>
+                        {!selectedTool && (
+                            <div className="text-sm text-gray-500">
+                                Step: {getStepTitle()}
+                            </div>
+                        )}
+                        {isCollapsible && onCollapse && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={onCollapse}
+                                className="h-6 w-6 p-0 hover:bg-blue-100 ml-2"
+                                title="Collapse toolbox"
+                            >
+                                <ChevronUp className="w-4 h-4 text-blue-600" />
+                            </Button>
+                        )}
                     </div>
+                </div>
+            )}
+            
+            {/* Add a header when no navigation is shown (tool-selection step) */}
+            {!showNavigation && isCollapsible && (
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+                    <div className="flex items-center">
+                        <Settings className="w-4 h-4 mr-2 text-blue-600" />
+                        <span className="text-sm font-semibold text-gray-700">Analysis Tools</span>
+                    </div>
+                    {onCollapse && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={onCollapse}
+                            className="h-6 w-6 p-0 hover:bg-blue-100"
+                            title="Collapse toolbox"
+                        >
+                            <ChevronUp className="w-4 h-4 text-blue-600" />
+                        </Button>
+                    )}
                 </div>
             )}
             

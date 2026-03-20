@@ -1,42 +1,60 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { FeatureCollection, ColumnMapping } from '../interfaces/data-interfaces';
-import { BaseTool } from '../interfaces/tool-interfaces';
+import { FeatureCollection } from '../interfaces/data-interfaces';
+import { AttributeMapping } from '../interfaces/attribute-mapping';
+import { ExecutionMode } from '../interfaces/simple-tool';
+
+interface WorkflowHistoryEntry {
+    id: string;
+    timestamp: number;
+    toolId: string;
+    dataSourceId: string;
+    fieldMapping: AttributeMapping | null;
+    toolOptions: Record<string, any>;
+    resultDataSourceId?: string;
+}
 
 // Update the workflow state interface
 interface ToolWorkflowState {
-    selectedTool: BaseTool | null;
-    currentStep: 'tool-selection' | 'data-upload' | 'field-mapping' | 'options' | 'visualization';
-    uploadedData: FeatureCollection | null;
-    fieldMapping: ColumnMapping | null;
+    selectedToolId: string | null;
+    currentStep: 'tool-selection' | 'options' | 'visualization';
+    selectedDataSourceId: string | null;
+    selectedData: FeatureCollection | null;
+    fieldMapping: AttributeMapping | null;
     toolOptions: Record<string, any>;
+    executionMode: ExecutionMode | null;
+    history: WorkflowHistoryEntry[];
 }
 
 const initialState: ToolWorkflowState = {
-    selectedTool: null,
+    selectedToolId: null,
     currentStep: 'tool-selection',
-    uploadedData: null,
+    selectedDataSourceId: null,
+    selectedData: null,
     fieldMapping: null,
-    toolOptions: {}
+    toolOptions: {},
+    executionMode: null,
+    history: []
 };
 
 const workflowSlice = createSlice({
     name: 'workflow',
     initialState,
     reducers: {
-        selectTool: (state, action: PayloadAction<BaseTool>) => {
-            state.selectedTool = action.payload;
-            state.currentStep = 'data-upload';
+        selectTool: (state, action: PayloadAction<string>) => {
+            state.selectedToolId = action.payload;
+            state.currentStep = 'options';
         },
         setCurrentStep: (state, action: PayloadAction<ToolWorkflowState['currentStep']>) => {
             state.currentStep = action.payload;
         },
-        setUploadedData: (state, action: PayloadAction<FeatureCollection>) => {
-            state.uploadedData = action.payload;
-            state.currentStep = 'field-mapping';
+        setSelectedDataSource: (state, action: PayloadAction<{dataSourceId: string, data: FeatureCollection}>) => {
+            state.selectedDataSourceId = action.payload.dataSourceId;
+            state.selectedData = action.payload.data;
+            // Stay on options step since everything is now on one page
         },
-        setFieldMapping: (state, action: PayloadAction<ColumnMapping>) => {
+        setFieldMapping: (state, action: PayloadAction<AttributeMapping>) => {
             state.fieldMapping = action.payload;
-            state.currentStep = 'options';
+            // Stay on options step since field mapping is now inline
         },
         setToolOptions: (state, action: PayloadAction<Record<string, any>>) => {
             state.toolOptions = action.payload;
@@ -44,31 +62,62 @@ const workflowSlice = createSlice({
         proceedToVisualization: (state) => {
             state.currentStep = 'visualization';
         },
+        setExecutionMode: (state, action: PayloadAction<ExecutionMode | null>) => {
+            state.executionMode = action.payload;
+        },
         resetWorkflow: (state) => {
-            state.selectedTool = null;
+            state.selectedToolId = null;
             state.currentStep = 'tool-selection';
-            state.uploadedData = null;
+            state.selectedDataSourceId = null;
+            state.selectedData = null;
             state.fieldMapping = null;
             state.toolOptions = {};
+            state.executionMode = null;
         },
         goBackStep: (state) => {
             switch (state.currentStep) {
-                case 'data-upload':
-                    state.currentStep = 'tool-selection';
-                    state.selectedTool = null;
-                    break;
-                case 'field-mapping':
-                    state.currentStep = 'data-upload';
-                    state.uploadedData = null;
-                    break;
                 case 'options':
-                    state.currentStep = 'field-mapping';
+                    state.currentStep = 'tool-selection';
+                    state.selectedToolId = null;
+                    state.selectedDataSourceId = null;
+                    state.selectedData = null;
                     state.fieldMapping = null;
+                    state.toolOptions = {};
+                    state.executionMode = null;
                     break;
                 case 'visualization':
                     state.currentStep = 'options';
                     break;
             }
+        },
+        addToHistory: (state, action: PayloadAction<{ resultDataSourceId?: string }>) => {
+            if (!state.selectedToolId || !state.selectedDataSourceId) return;
+
+            const entry: WorkflowHistoryEntry = {
+                id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: Date.now(),
+                toolId: state.selectedToolId,
+                dataSourceId: state.selectedDataSourceId,
+                fieldMapping: state.fieldMapping,
+                toolOptions: { ...state.toolOptions },
+                resultDataSourceId: action.payload.resultDataSourceId
+            };
+
+            // Keep only last 50 entries
+            state.history = [entry, ...state.history].slice(0, 50);
+        },
+        rerunFromHistory: (state, action: PayloadAction<string>) => {
+            const entry = state.history.find(h => h.id === action.payload);
+            if (!entry) return;
+
+            state.selectedToolId = entry.toolId;
+            state.selectedDataSourceId = entry.dataSourceId;
+            state.fieldMapping = entry.fieldMapping;
+            state.toolOptions = { ...entry.toolOptions };
+            state.currentStep = 'options';
+        },
+        clearHistory: (state) => {
+            state.history = [];
         }
     }
 });
@@ -76,12 +125,18 @@ const workflowSlice = createSlice({
 export const {
     selectTool,
     setCurrentStep,
-    setUploadedData,
+    setSelectedDataSource,
     setFieldMapping,
     setToolOptions,
+    setExecutionMode,
     proceedToVisualization,
     resetWorkflow,
-    goBackStep
+    goBackStep,
+    addToHistory,
+    rerunFromHistory,
+    clearHistory
 } = workflowSlice.actions;
+
+export type { WorkflowHistoryEntry };
 
 export default workflowSlice.reducer; 

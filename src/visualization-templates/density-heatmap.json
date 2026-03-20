@@ -1,0 +1,29 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Density Heatmap",
+    "color": [255, 153, 31],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.6,
+      "strokeOpacity": 0.2,
+      "thickness": 1,
+      "colorRange": {
+        "name": "Heat",
+        "type": "sequential",
+        "category": "Uber",
+        "colors": ["#FFF5F0", "#FEE0D2", "#FCBBA1", "#FC9272", "#FB6A4A", "#EF3B2C", "#CB181D", "#A50F15", "#67000D"]
+      },
+      "filled": true,
+      "enable3d": true,
+      "stroked": false,
+      "wireframe": false
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "linear"
+  }
+}

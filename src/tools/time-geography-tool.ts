@@ -1,783 +1,412 @@
-import { AbstractBaseTool } from './base-tool';
-import { AnalysisContext, AnalysisResult, DatasetResult, ProgressCallback, ToolOption } from '../interfaces/tool-interfaces';
-import { FeatureCollection } from '../interfaces/data-interfaces';
-import { preprocessGeojsonData } from '../data-processors/data-preprocessing';
-import { PROCESSED_TIME_FIELD, PROCESSED_NEIGHBORS_FIELD, PROCESSED_HEIGHT_FIELD, COLORS } from '../utils/constants';
-import store from '../stores/store';
-import { selectSideLength } from '../stores/metadata-slice';
-import { createSTKDE } from '../data-processors/stkde';
-import { createCustomConfigSTKDE } from "../utils/config";
-import { selectHeightScale } from "@/stores/metadata-slice";
-export class TimeGeographyTool extends AbstractBaseTool {
-    readonly id = 'time-geography';
-    readonly name = 'Time Geography';
-    readonly description = 'Analyze movement patterns and space-time paths';
-    readonly icon = '🕐';
-    readonly category = 'analysis' as const;
-    readonly version = '1.0.0';
-    readonly author = 'GISPark Team';
+import { SimpleTool, ToolOptionSchema } from '@/interfaces/simple-tool';
+import { FeatureCollection, GeoJSONFeature } from '@/interfaces/data-interfaces';
+import { AttributeMapping, getProperty } from '@/interfaces/attribute-mapping';
+import { ToolUtils, ProgressReporter } from './tool-utils';
+import { PROCESSED_TIME_FIELD, PROCESSED_NEIGHBORS_FIELD, PROCESSED_HEIGHT_FIELD, COLORS } from '@/utils/constants';
 
-    readonly requiredFields = ['latitude', 'longitude', 'time'];
-    readonly optionalFields = ['altitude'];
+/**
+ * 3D Trajectory Visualization Tool
+ *
+ * Converts trajectory point data (lat, lng, timestamp) into a 3D space-time path
+ * where X = longitude, Y = latitude, Z = time. Features include:
+ * - 3D trajectory lines connecting consecutive points elevated by time
+ * - Optional stay point detection and visualization
+ * - Optional 3D coordinate axes with time labels
+ */
+export class TimeGeographyTool implements SimpleTool {
+  id = 'time-geography';
+  name = '3D Trajectory';
+  description = 'Visualize movement trajectories in 3D space-time (X=longitude, Y=latitude, Z=time)';
+  icon = '🕐';
+  category = 'visualization' as const;
+  version = '2.0.0';
+  capabilities = {
+    executionPolicy: 'frontend_only' as const,
+    recommendations: {
+      frontendMaxRows: 100000,
+      notes: ['Large trajectories (>50k points) may cause slower rendering'],
+    },
+  };
 
-    readonly options: ToolOption[] = [
-        {
-            key: 'visualizeStay',
-            label: 'Visualize Stay Points',
-            type: 'boolean',
-            defaultValue: false,
-            description: 'Identify and highlight stay points in the trajectory'
-        },
-        {
-            key: 'visualizeSTKDE',
-            label: 'Visualize Space-Time KDE',
-            type: 'boolean',
-            defaultValue: false,
-            description: 'Generate kernel density estimation in space and time'
-        },
-        {
-            key: 'visualizeAxis',
-            label: 'Show 3D Axis',
-            type: 'boolean',
-            defaultValue: false,
-            description: 'Display 3D coordinate axes for time dimension'
-        },
-        {
-            key: 'timeWindow',
-            label: 'Time Window (hours)',
-            type: 'number',
-            defaultValue: 24,
-            min: 1,
-            max: 168,
-            description: 'Time window for analysis in hours'
-        }
+  attributeMapping: AttributeMapping = {
+    time: 'timestamp'
+  };
+
+  getOptionSchema(): ToolOptionSchema[] {
+    return [
+      {
+        key: 'visualizeStay',
+        label: 'Visualize Stay Points',
+        type: 'boolean',
+        defaultValue: false
+      },
+      {
+        key: 'showAxes',
+        label: 'Show 3D Axis',
+        type: 'boolean',
+        defaultValue: true
+      },
+      {
+        key: 'timeBreaks',
+        label: 'Z-Axis Time Labels Interval',
+        type: 'select',
+        defaultValue: 'auto',
+        options: [
+          { label: 'Auto (Min/Max Only)', value: 'auto' },
+          { label: 'Every 1 Hour', value: '1h' },
+          { label: 'Every 4 Hours', value: '4h' },
+          { label: 'Every 12 Hours', value: '12h' },
+          { label: 'Every 24 Hours', value: '24h' }
+        ]
+      },
+      {
+        key: 'timeWindow',
+        label: 'Stay Point Time Window (hours)',
+        type: 'number',
+        defaultValue: 24,
+        min: 1,
+        max: 168
+      }
     ];
+  }
 
-    async analyze(context: AnalysisContext, progressCallback?: ProgressCallback): Promise<AnalysisResult> {
-        try {
-            this.updateProgress(progressCallback, 10, 'Preprocessing trajectory data...');
+  async analyze(
+    data: FeatureCollection,
+    options: Record<string, unknown>,
+    attributes?: AttributeMapping
+  ): Promise<FeatureCollection[]> {
+    const progress = new ProgressReporter(options.onProgress as ((progress: number, message?: string) => void) | undefined);
 
-            const { data, fieldMapping, options } = context;
+    try {
+      progress.report(10, 'Preprocessing trajectory data...');
 
-            // Apply standard preprocessing pipeline
-            this.updateProgress(progressCallback, 30, 'Applying standard preprocessing...');
+      if (!ToolUtils.isValidGeoJSON(data)) {
+        console.error('Invalid GeoJSON data provided');
+        return [ToolUtils.emptyResult()];
+      }
 
-            // Detec the boundary and sort the data by time. A new column will be added to the data representing the time order.
-            const preprocessedData = preprocessGeojsonData(data);
+      const timeField = attributes?.time || this.attributeMapping.time;
+      const latField = 'latitude';
+      const lngField = 'longitude';
 
-            // Validate preprocessing results
-            const validation = this._validatePreprocessedData(preprocessedData);
-            if (!validation.valid) {
-                return this.createErrorResult(`Preprocessing failed: ${validation.errors.join(', ')}`);
-            }
+      if (!timeField) {
+        console.error('Time field mapping is required for trajectory visualization');
+        return [ToolUtils.emptyResult()];
+      }
 
-            this.updateProgress(progressCallback, 60, 'Analyzing movement patterns...');
+      progress.report(30, 'Sorting and projecting trajectory to 3D...');
 
-            // Process features for analysis-specific enhancements
-            const enhancedFeatures = this._enhanceFeatures(preprocessedData, fieldMapping, options);
+      const preprocessedData = this._preprocessData(data, timeField, latField, lngField);
 
-            this.updateProgress(progressCallback, 80, 'Creating visualization datasets...');
+      if (preprocessedData.features.length === 0) {
+        console.error('No valid trajectory points found');
+        return [ToolUtils.emptyResult()];
+      }
 
-            // Create datasets with full templates
-            const datasets = await this._createVisualizationDatasets(
-                preprocessedData,
-                enhancedFeatures,
-                fieldMapping,
-                options
-            );
+      progress.report(60, 'Building visualization layers...');
 
-            this.updateProgress(progressCallback, 100, 'Analysis complete');
+      const results = this._createVisualizationDatasets(
+        preprocessedData,
+        options,
+        latField,
+        lngField
+      );
 
-            return this.createMultiDatasetResult(datasets, {
-                totalFeatures: preprocessedData.features.length,
-                timeRange: this._extractTimeRange(enhancedFeatures),
-                stayPointsDetected: options.visualizeStay ?
-                    enhancedFeatures.filter(f => f.properties._is_stay_point).length : 0
-            });
+      progress.report(100, 'Complete');
+      return results;
 
-        } catch (error) {
-            console.error('Time Geography analysis error:', error);
-            return this.createErrorResult(`Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
+    } catch (error) {
+      console.error('3D Trajectory visualization error:', error);
+      return [ToolUtils.emptyResult()];
     }
+  }
 
-    private _enhanceFeatures(
-        preprocessedData: FeatureCollection,
-        fieldMapping: any,
-        options: Record<string, any>
-    ): any[] {
-        return preprocessedData.features.map((feature, index) => {
-            const [lng, lat] = feature.geometry.coordinates;
-            const time = this.getMappedValue(feature, fieldMapping, 'time');
+  /**
+   * Preprocess trajectory data - sort by time, calculate neighbors, and map time to Z-axis
+   */
+  private _preprocessData(
+    data: FeatureCollection,
+    timeField: string,
+    latField: string,
+    lngField: string
+  ): FeatureCollection {
+    const validFeatures = data.features
+      .map((feature, index) => {
+        const coords = (feature.geometry as any).coordinates;
+        if (!coords) return null;
 
-            const enhancedFeature = {
-                ...feature,
-                properties: {
-                    ...feature.properties,
-                    _analysis_sequence: index,
-                    _analysis_timestamp: new Date(time).toISOString(),
-                    _analysis_lat: lat,
-                    _analysis_lng: lng,
-                    _is_stay_point: false
-                }
-            };
+        const [lng, lat] = coords;
+        const timeValue = getProperty(feature, timeField);
 
-            // Add stay point analysis if enabled
-            if (options.visualizeStay) {
-                enhancedFeature.properties._is_stay_point = this._detectStayPoint(
-                    preprocessedData.features, index, fieldMapping, options.timeWindow || 24
-                );
-            }
+        if (!timeValue) return null;
 
-            return enhancedFeature;
-        });
-    }
+        const timestamp = new Date(timeValue).getTime();
+        if (isNaN(timestamp)) return null;
 
-    private async _createVisualizationDatasets(
-        preprocessedData: FeatureCollection,
-        enhancedFeatures: any[],
-        fieldMapping: any,
-        options: Record<string, any>
-    ): Promise<DatasetResult[]> {
-        const datasets: DatasetResult[] = [];
-
-        // 1. Main trajectory dataset with direct Kepler.gl configuration
-        const trajectoryConfig = this._createTrajectoryLayerConfig(fieldMapping);
-        datasets.push(this.createDataset(
-            'time-geography-trajectory',
-            'Space-Time Trajectory',
-            preprocessedData,
-            {
-                description: 'Main trajectory visualization with 3D time elevation',
-                visualizationConfig: {
-                    config: {
-                        visState: {
-                            layers: [trajectoryConfig]
-                        }
-                    }
-                }
-            }
-        ));
-
-        // 2. Stay points dataset if enabled
-        if (options.visualizeStay) {
-            const stayPoints = enhancedFeatures.filter(f => f.properties._is_stay_point);
-            if (stayPoints.length > 0) {
-                const stayPointsData = this._createStayPointsData(stayPoints);
-                const stayPointsConfig = this._createStayPointsLayerConfig();
-
-                datasets.push(this.createDataset(
-                    'stay-points',
-                    'Stay Points',
-                    stayPointsData,
-                    {
-                        description: 'Detected stay points from trajectory analysis',
-                        visualizationConfig: {
-                            config: {
-                                visState: {
-                                    layers: [stayPointsConfig]
-                                }
-                            }
-                        }
-                    }
-                ));
-            }
-        }
-
-        // 3. STKDE datasets if enabled
-        if (options.visualizeSTKDE) {
-            try {
-                const stkdeData = await this._createSTKDEData(preprocessedData, fieldMapping);
-                if (stkdeData && stkdeData.length > 0) {
-                    stkdeData.forEach((data, index) => {
-                        const confidence = index === 0 ? 90 : index === 1 ? 95 : 99;
-                        const datasetId = `stkde-density-${index + 1}`;
-                        const stkdeConfig = this._createSTKDELayerConfig(datasetId, confidence);
-
-                        datasets.push(this.createDataset(
-                            datasetId,
-                            `STKDE ${confidence}%`,
-                            data,
-                            {
-                                description: `Space-time kernel density estimation ${confidence}% confidence`,
-                                visualizationConfig: {
-                                    config: {
-                                        visState: {
-                                            layers: [stkdeConfig]
-                                        }
-                                    }
-                                }
-                            }
-                        ));
-                    });
-                }
-            } catch (error) {
-                console.error('STKDE processing error:', error);
-            }
-        }
-
-        // 4. Coordinate axes dataset if enabled
-        if (options.visualizeAxis) {
-            const axesData = this._create3DAxesData(enhancedFeatures);
-            if (axesData) {
-                const axesConfig = this._createAxesLayerConfig();
-
-                datasets.push(this.createDataset(
-                    'coordinate-axes',
-                    '3D Coordinate Axes',
-                    axesData,
-                    {
-                        description: '3D coordinate axes for time dimension visualization',
-                        visualizationConfig: {
-                            config: {
-                                visState: {
-                                    layers: [axesConfig]
-                                }
-                            }
-                        }
-                    }
-                ));
-            }
-        }
-
-        return datasets;
-    }
-
-    // Fixed trajectory layer configuration to match working format
-    private _createTrajectoryLayerConfig(fieldMapping: any) {
-        const timestamp = Date.now();
-        const heightScale = selectHeightScale(store.getState());
         return {
-            id: `time-geography-trajectory-layer-${timestamp}`,
-            type: 'line',
-            config: {
-                dataId: 'time-geography-trajectory',
-                label: 'Custom Line',
-                columnMode: 'neighbors',  // This is crucial!
-                color: COLORS.LINE,
-                columns: {
-                    lat: fieldMapping.latitude || 'latitude',
-                    lng: fieldMapping.longitude || 'longitude',
-                    neighbors: PROCESSED_NEIGHBORS_FIELD,  // This is required for line layers
-                    alt: PROCESSED_TIME_FIELD  // Use time field for elevation
-                },
-                isVisible: true,
-                visConfig: {
-                    opacity: 0.8,
-                    strokeOpacity: 0.8,
-                    thickness: 3.2,
-                    radius: 10,
-                    sizeRange: [0, 10],
-                    radiusRange: [0, 50],
-                    elevationScale: heightScale,
-                    stroked: true,
-                    filled: true,
-                    enable3d: true,
-                    wireframe: false,
-                    fixedHeight: false
-                }
-            }
+          ...feature,
+          properties: {
+            ...feature.properties,
+            _timestamp: timestamp,
+            _original_index: index,
+            [latField]: lat,
+            [lngField]: lng
+          }
         };
+      })
+      .filter(Boolean) as GeoJSONFeature[];
+
+    validFeatures.sort((a, b) =>
+      a!.properties!._timestamp - b!.properties!._timestamp
+    );
+
+    const timeExtent = [
+      Math.min(...validFeatures.map(f => f.properties!._timestamp)),
+      Math.max(...validFeatures.map(f => f.properties!._timestamp))
+    ];
+    const timeRange = timeExtent[1] - timeExtent[0];
+
+    const bounds = ToolUtils.getBounds(validFeatures);
+    let TOTAL_HEIGHT_METERS = 1000;
+    if (bounds) {
+      TOTAL_HEIGHT_METERS = ToolUtils.calculateOptimalZAxisHeight(bounds.minLng, bounds.maxLng, bounds.minLat, bounds.maxLat);
     }
 
-    private _createStayPointsLayerConfig() {
-        const timestamp = Date.now();
-        return {
-            id: `stay-points-layer-${timestamp}`,
-            type: 'point',
-            config: {
-                dataId: 'stay-points',
-                label: 'Stay Points',
-                color: COLORS.ACTIVITY_SPACE,
-                columns: {
-                    lat: 'latitude',
-                    lng: 'longitude'
-                },
-                isVisible: true,
-                visConfig: {
-                    opacity: 0.8,
-                    radius: 20,
-                    radiusRange: [5, 50],
-                    filled: true,
-                    stroked: true,
-                    strokeColor: [255, 255, 255],
-                    thickness: 2
-                }
-            },
-            visualChannels: {
-                sizeField: { name: '_stay_duration', type: 'real' },
-                sizeScale: 'linear',
-                colorField: { name: '_stay_id', type: 'integer' },
-                colorScale: 'quantile'
-            }
-        };
-    }
+    const processedFeatures = validFeatures.map((feature, index) => {
+      const timeProgress = timeRange > 0
+        ? (feature.properties!._timestamp - timeExtent[0]) / timeRange
+        : 0;
+      const scaledHeight = timeProgress * TOTAL_HEIGHT_METERS;
 
-    private _createSTKDELayerConfig(dataId: string, confidence: number) {
-        const color = confidence === 99 ? COLORS.STKDE_99 :
-            confidence === 95 ? COLORS.STKDE_95 : COLORS.STKDE_90;
-        const opacity = confidence === 99 ? 0.3 :
-            confidence === 95 ? 0.8 : 0.6;
+      const geom = feature.geometry as any;
+      const [lng, lat] = geom.coordinates;
 
-        // Create layer config that matches the working format exactly
-        return {
-            type: "geojson",
-            config: {
-                dataId: dataId,
-                columnMode: "geojson",
-                label: `STKDE ${confidence}%`,
-                columns: { geojson: "_geojson" },
-                isVisible: true,
-                color: color,
-                visConfig: {
-                    opacity: opacity,
-                    strokeOpacity: 0.8,
-                    thickness: 0.5,
-                    radius: 10,
-                    sizeRange: [0, 10],
-                    radiusRange: [0, 50],
-                    heightRange: [0, 500],
-                    elevationScale: 1,
-                    stroked: true,
-                    filled: true,
-                    enable3d: true,
-                    wireframe: false,
-                    fixedHeight: true
-                },
-                hidden: false,
-                heightField: { name: PROCESSED_HEIGHT_FIELD, type: "float" }
-            },
-            visualChannels: {
-                heightScale: "linear",
-                colorField: null,
-                colorScale: "quantile",
-                strokeColorField: null,
-                strokeColorScale: "quantile",
-                sizeField: null,
-                sizeScale: "linear"
-            }
-        };
-    }
+      const neighbors: number[] = [];
+      if (index > 0) neighbors.push(index - 1);
+      if (index < validFeatures.length - 1) neighbors.push(index + 1);
 
-    private _createAxesLayerConfig() {
-        return {
-            type: 'geojson',
-            config: {
-                dataId: 'coordinate-axes',
-                columnMode: 'geojson',
-                label: '3D Coordinate Axes',
-                columns: { geojson: '_geojson' },
-                isVisible: true,
-                color: COLORS.DEFAULT,
-                visConfig: {
-                    opacity: 0.8,
-                    strokeOpacity: 1.0,
-                    thickness: 3,
-                    radius: 10,
-                    sizeRange: [0, 10],
-                    radiusRange: [0, 50],
-                    heightRange: [0, 500],
-                    elevationScale: 5,
-                    stroked: true,
-                    filled: false,
-                    enable3d: true,
-                    wireframe: false,
-                    fixedHeight: true
-                },
-                hidden: false,
-                heightField: { name: PROCESSED_HEIGHT_FIELD, type: 'real' }
-            },
-            visualChannels: {
-                heightScale: 'linear',
-                colorField: { name: 'axis_type', type: 'string' },
-                colorScale: 'ordinal',
-                strokeColorField: null,
-                strokeColorScale: 'quantile',
-                sizeField: null,
-                sizeScale: 'linear'
-            }
-        };
-    }
-
-    private async _createSTKDEData(
-        preprocessedData: FeatureCollection,
-        fieldMapping: any
-    ): Promise<FeatureCollection[]> {
-        try {
-            // Use the STKDE module to create density data
-            const timeField = fieldMapping.time || 'timestamp';
-            const stkdeResults = await createSTKDE(
-                preprocessedData,
-                timeField,
-                undefined, // spatial_bandwidth (auto-estimate)
-                undefined, // temporal_bandwidth (auto-estimate)
-                undefined, // cell_size (auto-estimate)
-                25 // n_time_slices
-            );
-
-            return stkdeResults as FeatureCollection[];
-        } catch (error) {
-            console.error('Error creating STKDE data:', error);
-            return [];
+      return {
+        ...feature,
+        geometry: {
+          ...feature.geometry,
+          coordinates: [lng, lat, scaledHeight]
+        },
+        properties: {
+          ...feature.properties,
+          [PROCESSED_TIME_FIELD]: timeProgress,
+          [PROCESSED_HEIGHT_FIELD]: scaledHeight,
+          [PROCESSED_NEIGHBORS_FIELD]: neighbors,
+          _time_progress: timeProgress,
+          _sequence: index
         }
-    }
+      };
+    });
 
-    private _detectStayPoint(
-        features: any[],
-        currentIndex: number,
-        fieldMapping: any,
-        timeWindowHours: number
-    ): boolean {
-        const currentFeature = features[currentIndex];
-        const currentLat = this.getMappedValue(currentFeature, fieldMapping, 'latitude');
-        const currentLng = this.getMappedValue(currentFeature, fieldMapping, 'longitude');
-        const currentTime = new Date(this.getMappedValue(currentFeature, fieldMapping, 'time')).getTime();
+    return {
+      type: 'FeatureCollection',
+      features: processedFeatures
+    };
+  }
 
-        const distanceThreshold = 100; // meters
-        const timeThreshold = timeWindowHours * 60 * 60 * 1000;
-        let nearbyCount = 0;
+  /**
+   * Create visualization datasets based on enabled options
+   */
+  private _createVisualizationDatasets(
+    preprocessedData: FeatureCollection,
+    options: Record<string, unknown>,
+    latField: string,
+    lngField: string
+  ): FeatureCollection[] {
+    const results: FeatureCollection[] = [];
 
-        for (let i = Math.max(0, currentIndex - 10); i < Math.min(features.length, currentIndex + 10); i++) {
-            if (i === currentIndex) continue;
+    const heightScale = options.heightScale as number | undefined;
 
-            const otherFeature = features[i];
-            const otherLat = this.getMappedValue(otherFeature, fieldMapping, 'latitude');
-            const otherLng = this.getMappedValue(otherFeature, fieldMapping, 'longitude');
-            const otherTime = new Date(this.getMappedValue(otherFeature, fieldMapping, 'time')).getTime();
-
-            if (Math.abs(currentTime - otherTime) > timeThreshold) continue;
-
-            const distance = this._calculateDistance(currentLat, currentLng, otherLat, otherLng);
-            if (distance < distanceThreshold) {
-                nearbyCount++;
-            }
+    // 1. Main trajectory dataset (always produced)
+    const trajectoryData: FeatureCollection = {
+      ...preprocessedData,
+      features: preprocessedData.features.map(f => ({
+        ...f,
+        properties: {
+          ...f.properties,
+          _dataset_type: 'time-geography-trajectory',
+          _layer_config: this._createTrajectoryLayerConfig(latField, lngField, heightScale)
         }
+      }))
+    };
+    results.push(trajectoryData);
 
-        return nearbyCount >= 3;
-    }
+    // 2. Stay points if enabled
+    if (options.visualizeStay) {
+      const timeWindowHours = (options.timeWindow as number) || 24;
+      const stayPoints = this._detectAndCreateStayPoints(
+        preprocessedData.features,
+        timeWindowHours,
+        latField,
+        lngField
+      );
 
-    private _calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
-        const R = 6371e3; // Earth's radius in meters
-        const φ1 = lat1 * Math.PI / 180;
-        const φ2 = lat2 * Math.PI / 180;
-        const Δφ = (lat2 - lat1) * Math.PI / 180;
-        const Δλ = (lng2 - lng1) * Math.PI / 180;
-
-        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return R * c;
-    }
-
-    private _createStayPointsData(stayPoints: any[]): FeatureCollection {
-        return {
-            type: 'FeatureCollection',
-            features: stayPoints.map((feature, index) => ({
-                ...feature,
-                properties: {
-                    ...feature.properties,
-                    _stay_duration: Math.random() * 3600 + 300, // Mock duration (5min-1hr)
-                    _stay_id: index,
-                    _stay_cluster: Math.floor(index / 3) // Simple clustering
-                }
-            }))
-        };
-    }
-
-    private _create3DAxesData(features: any[]): FeatureCollection | null {
-        if (features.length === 0) return null;
-
-        const bounds = this._calculateBounds(features);
-        const sideLength = selectSideLength(store.getState());
-        const axesFeatures: any[] = [];
-
-        // X-axis (longitude)
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'LineString' as const,
-                coordinates: [
-                    [bounds.minLng, bounds.minLat, 0],
-                    [bounds.maxLng, bounds.minLat, 0]
-                ]
-            },
+      if (stayPoints.features.length > 0) {
+        const stayPointsData: FeatureCollection = {
+          ...stayPoints,
+          features: stayPoints.features.map(f => ({
+            ...f,
             properties: {
-                _geojson: JSON.stringify({
-                    type: 'LineString',
-                    coordinates: [
-                        [bounds.minLng, bounds.minLat, 0],
-                        [bounds.maxLng, bounds.minLat, 0]
-                    ]
-                }),
-                axis_type: 'x_axis',
-                [PROCESSED_HEIGHT_FIELD]: sideLength
+              ...f.properties,
+              _dataset_type: 'stay-points',
+              _layer_config: this._createStayPointsLayerConfig()
             }
-        });
-
-        // Y-axis (latitude)
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'LineString' as const,
-                coordinates: [
-                    [bounds.minLng, bounds.minLat, 0],
-                    [bounds.minLng, bounds.maxLat, 0]
-                ]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'LineString',
-                    coordinates: [
-                        [bounds.minLng, bounds.minLat, 0],
-                        [bounds.minLng, bounds.maxLat, 0]
-                    ]
-                }),
-                axis_type: 'y_axis',
-                [PROCESSED_HEIGHT_FIELD]: sideLength
-            }
-        });
-
-        // Z-axis (time)
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'LineString' as const,
-                coordinates: [
-                    [bounds.minLng, bounds.minLat, 0],
-                    [bounds.minLng, bounds.minLat, sideLength]
-                ]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'LineString',
-                    coordinates: [
-                        [bounds.minLng, bounds.minLat, 0],
-                        [bounds.minLng, bounds.minLat, sideLength]
-                    ]
-                }),
-                axis_type: 'z_axis',
-                [PROCESSED_HEIGHT_FIELD]: sideLength
-            }
-        });
-
-        // Add small square polygon at the top of z-axis
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'Polygon' as const,
-                coordinates: [[
-                    [bounds.minLng - 0.00001, bounds.minLat - 0.00001, 0],
-                    [bounds.minLng + 0.00001, bounds.minLat - 0.00001, 0],
-                    [bounds.minLng + 0.00001, bounds.minLat + 0.00001, 0],
-                    [bounds.minLng - 0.00001, bounds.minLat + 0.00001, 0],
-                    [bounds.minLng - 0.00001, bounds.minLat - 0.00001, 0]
-                ]]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'Polygon',
-                    coordinates: [[
-                        [bounds.minLng - 0.00001, bounds.minLat - 0.00001, 0],
-                        [bounds.minLng + 0.00001, bounds.minLat - 0.00001, 0],
-                        [bounds.minLng + 0.00001, bounds.minLat + 0.00001, 0],
-                        [bounds.minLng - 0.00001, bounds.minLat + 0.00001, 0],
-                        [bounds.minLng - 0.00001, bounds.minLat - 0.00001, 0]
-                    ]]
-                }),
-                axis_type: 'z_indicator',
-                // The height should be the same as the side length
-                [PROCESSED_HEIGHT_FIELD]: sideLength
-            }
-        });
-
-        // const axesLabels = [];
-        // Add labels for each axis
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'Point' as const,
-                coordinates: [
-                    bounds.maxLng + 0.001,
-                    bounds.minLat,
-                    0
-                ]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'Point',
-                    coordinates: [
-                        bounds.maxLng + 0.001,
-                        bounds.minLat,
-                        0
-                    ]
-                }),
-                axis_type: 'x_label',
-                Label: 'Longitude'
-            }
-        });
-
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'Point' as const,
-                coordinates: [
-                    bounds.minLng,
-                    bounds.maxLat + 0.001,
-                    0
-                ]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'Point',
-                    coordinates: [
-                        bounds.minLng,
-                        bounds.maxLat + 0.001,
-                        0
-                    ]
-                }),
-                axis_type: 'y_label',
-                Label: 'Latitude'
-            }
-        });
-
-        axesFeatures.push({
-            type: 'Feature' as const,
-            geometry: {
-                type: 'Point' as const,
-                coordinates: [
-                    bounds.minLng - 0.001,
-                    bounds.minLat - 0.001,
-                    sideLength / 2
-                ]
-            },
-            properties: {
-                _geojson: JSON.stringify({
-                    type: 'Point',
-                    coordinates: [
-                        bounds.minLng - 0.001,
-                        bounds.minLat - 0.001,
-                        sideLength / 2
-                    ]
-                }),
-                axis_type: 'z_label',
-                Label: 'Time'
-            }
-        });
-        return {
-            type: 'FeatureCollection',
-            features: axesFeatures
+          }))
         };
+        results.push(stayPointsData);
+      }
     }
 
-    private _calculateBounds(features: any[]): { minLat: number; maxLat: number; minLng: number; maxLng: number } {
-        const lats = features.map(f => f.properties._analysis_lat);
-        const lngs = features.map(f => f.properties._analysis_lng);
+    return results;
+  }
 
-        return {
-            minLat: Math.min(...lats),
-            maxLat: Math.max(...lats),
-            minLng: Math.min(...lngs),
-            maxLng: Math.max(...lngs)
-        };
-    }
+  /**
+   * Detect stay points in trajectory
+   */
+  private _detectAndCreateStayPoints(
+    features: GeoJSONFeature[],
+    timeWindowHours: number,
+    latField: string,
+    lngField: string
+  ): FeatureCollection {
+    const distanceThreshold = 100; // meters
+    const timeThreshold = timeWindowHours * 60 * 60 * 1000;
+    const stayPoints: GeoJSONFeature[] = [];
 
-    private _extractTimeRange(features: any[]): { start: string; end: string } {
-        if (features.length === 0) {
-            return { start: '', end: '' };
+    features.forEach((currentFeature, currentIndex) => {
+      const currentLat = currentFeature.properties![latField];
+      const currentLng = currentFeature.properties![lngField];
+      const currentTime = currentFeature.properties!._timestamp;
+
+      let nearbyCount = 0;
+      let minNearbyTime = currentTime;
+      let maxNearbyTime = currentTime;
+
+      for (let i = Math.max(0, currentIndex - 10); i < Math.min(features.length, currentIndex + 10); i++) {
+        if (i === currentIndex) continue;
+
+        const otherFeature = features[i];
+        const otherLat = otherFeature.properties![latField];
+        const otherLng = otherFeature.properties![lngField];
+        const otherTime = otherFeature.properties!._timestamp;
+
+        if (Math.abs(currentTime - otherTime) > timeThreshold) continue;
+
+        const distance = this._calculateDistance(currentLat, currentLng, otherLat, otherLng);
+        if (distance < distanceThreshold) {
+          nearbyCount++;
+          minNearbyTime = Math.min(minNearbyTime, otherTime);
+          maxNearbyTime = Math.max(maxNearbyTime, otherTime);
         }
+      }
 
-        return {
-            start: features[0]?.properties?._analysis_timestamp || '',
-            end: features[features.length - 1]?.properties?._analysis_timestamp || ''
-        };
-    }
+      if (nearbyCount >= 3) {
+        const stayDuration = (maxNearbyTime - minNearbyTime) / 1000;
+        stayPoints.push({
+          ...currentFeature,
+          properties: {
+            ...currentFeature.properties,
+            _is_stay_point: true,
+            _stay_duration: stayDuration,
+            _stay_id: stayPoints.length,
+            _stay_cluster: Math.floor(stayPoints.length / 3)
+          }
+        });
+      }
+    });
 
-    private _validatePreprocessedData(data: FeatureCollection): { valid: boolean; errors: string[] } {
-        const errors: string[] = [];
+    return {
+      type: 'FeatureCollection',
+      features: stayPoints
+    };
+  }
 
-        if (data.features.length === 0) {
-            errors.push('No features found in preprocessed data');
-            return { valid: false, errors };
+  /**
+   * Calculate Haversine distance between two points
+   */
+  private _calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) *
+      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  }
+
+  // ========================================
+  // Layer Configuration Templates
+  // ========================================
+
+  private _createTrajectoryLayerConfig(latField: string, lngField: string, heightScale?: number): any {
+    const timestamp = Date.now();
+    const elevationScale = Math.max(1, Math.round(heightScale || 1));
+
+    return {
+      id: `time-geography-trajectory-layer-${timestamp}`,
+      type: 'line',
+      config: {
+        dataId: 'time-geography-trajectory',
+        label: '3D Trajectory',
+        columnMode: 'neighbors',
+        color: COLORS.LINE,
+        columns: {
+          lat: latField,
+          lng: lngField,
+          neighbors: PROCESSED_NEIGHBORS_FIELD,
+          alt: PROCESSED_HEIGHT_FIELD
+        },
+        isVisible: true,
+        visConfig: {
+          opacity: 0.8,
+          thickness: 2,
+          elevationScale,
+          enable3d: true
         }
+      }
+    };
+  }
 
-        const firstFeature = data.features[0];
-        if (!firstFeature.properties) {
-            errors.push('Features missing properties after preprocessing');
-        } else {
-            if (!(PROCESSED_TIME_FIELD in firstFeature.properties)) {
-                errors.push(`Missing ${PROCESSED_TIME_FIELD} field after preprocessing`);
-            }
-            if (!(PROCESSED_NEIGHBORS_FIELD in firstFeature.properties)) {
-                errors.push(`Missing ${PROCESSED_NEIGHBORS_FIELD} field after preprocessing`);
-            }
+  private _createStayPointsLayerConfig(): any {
+    const timestamp = Date.now();
+
+    return {
+      id: `stay-points-layer-${timestamp}`,
+      type: 'point',
+      config: {
+        dataId: 'stay-points',
+        label: 'Stay Points',
+        color: COLORS.ACTIVITY_SPACE,
+        columns: {
+          lat: 'latitude',
+          lng: 'longitude'
+        },
+        isVisible: true,
+        visConfig: {
+          opacity: 0.8,
+          radius: 20,
+          radiusRange: [5, 50],
+          filled: true,
+          stroked: true,
+          strokeColor: [255, 255, 255],
+          thickness: 2
         }
-
-        if (firstFeature.geometry?.coordinates && firstFeature.geometry.coordinates.length < 3) {
-            errors.push('Coordinates missing altitude dimension after preprocessing');
-        }
-
-        return {
-            valid: errors.length === 0,
-            errors
-        };
-    }
-
-    getDocumentation(): string {
-        return `
-# Time Geography Analysis Tool
-
-Analyzes movement patterns and creates space-time paths from trajectory data with comprehensive visualization options.
-
-## Required Fields
-- **Latitude**: Geographic latitude coordinates
-- **Longitude**: Geographic longitude coordinates  
-- **Time**: Timestamp for each location point
-
-## Options
-- **Visualize Stay Points**: Identifies locations where the subject remained for extended periods
-- **Visualize Space-Time KDE**: Generates kernel density estimation in space and time using STKDE module
-- **Show 3D Axis**: Displays 3D coordinate axes for time dimension
-- **Time Window**: Time window for analysis in hours (1-168)
-
-## Output Datasets
-1. **Space-Time Trajectory**: Main 3D trajectory with time elevation
-2. **Stay Points**: Detected stationary locations (if enabled)
-3. **STKDE Density**: Space-time kernel density estimation classes (if enabled)
-4. **3D Coordinate Axes**: Reference axes for time dimension (if enabled)
-
-Each dataset includes a complete visualization template optimized for its data type.
-        `.trim();
-    }
-
-    getExampleData(): FeatureCollection {
-        return {
-            type: 'FeatureCollection',
-            features: [
-                {
-                    type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [-122.4194, 37.7749]
-                    },
-                    properties: {
-                        timestamp: '2023-01-01T08:00:00Z',
-                        user_id: 'user123'
-                    }
-                },
-                {
-                    type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [-122.4094, 37.7849]
-                    },
-                    properties: {
-                        timestamp: '2023-01-01T08:30:00Z',
-                        user_id: 'user123'
-                    }
-                }
-            ]
-        };
-    }
-} 
+      },
+      visualChannels: {
+        sizeField: { name: '_stay_duration', type: 'real' },
+        sizeScale: 'linear',
+        colorField: { name: '_stay_id', type: 'integer' },
+        colorScale: 'quantile'
+      }
+    };
+  }
+}

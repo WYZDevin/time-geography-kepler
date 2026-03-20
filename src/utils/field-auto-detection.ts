@@ -1,4 +1,4 @@
-import { ColumnMapping } from '../interfaces/data-interfaces';
+import { AttributeMapping } from '../interfaces/attribute-mapping';
 
 // Common field name patterns for automatic detection
 const FIELD_PATTERNS = {
@@ -26,17 +26,22 @@ const FIELD_PATTERNS = {
  * @param availableFields - Array of field names from the dataset
  * @returns Partial column mapping with detected fields
  */
-export function autoDetectFields(availableFields: string[]): Partial<ColumnMapping> {
-    const mapping: Partial<ColumnMapping> = {};
+export function autoDetectFields(availableFields: string[]): Partial<AttributeMapping> {
+    const mapping: Partial<AttributeMapping> = {};
     
     // Convert field names to lowercase for case-insensitive matching
     const lowercaseFields = availableFields.map(field => field.toLowerCase());
     
+    // Only auto-detect non-spatial attributes (spatial data comes from GeoJSON geometry)
+    const nonSpatialPatterns = {
+        time: FIELD_PATTERNS.time
+    };
+    
     // Auto-detect each field type
-    Object.entries(FIELD_PATTERNS).forEach(([fieldType, patterns]) => {
+    Object.entries(nonSpatialPatterns).forEach(([fieldType, patterns]) => {
         const detectedField = findBestMatch(availableFields, lowercaseFields, patterns);
         if (detectedField) {
-            mapping[fieldType as keyof ColumnMapping] = detectedField;
+            mapping[fieldType as keyof AttributeMapping] = detectedField;
         }
     });
     
@@ -92,19 +97,19 @@ function findBestMatch(
  * @param fieldType - The type of field (longitude, latitude, etc.)
  * @returns Confidence score between 0 and 1
  */
-export function getFieldConfidence(fieldName: string, fieldType: keyof ColumnMapping): number {
+export function getFieldConfidence(fieldName: string, fieldType: keyof typeof FIELD_PATTERNS): number {
     if (!fieldName) return 0;
     
-    const patterns = FIELD_PATTERNS[fieldType];
+    const patterns = FIELD_PATTERNS[fieldType as keyof typeof FIELD_PATTERNS];
     const lowercaseField = fieldName.toLowerCase();
     
     // Exact match gets highest confidence
-    if (patterns.some(pattern => pattern === lowercaseField)) {
+    if (patterns.some((pattern: string) => pattern === lowercaseField)) {
         return 1.0;
     }
     
     // Partial match gets medium confidence
-    if (patterns.some(pattern => lowercaseField.includes(pattern) || pattern.includes(lowercaseField))) {
+    if (patterns.some((pattern: string) => lowercaseField.includes(pattern) || pattern.includes(lowercaseField))) {
         return 0.7;
     }
     
@@ -118,8 +123,8 @@ export function getFieldConfidence(fieldName: string, fieldType: keyof ColumnMap
  * @returns Validation result with suggestions
  */
 export function validateAutoDetection(
-    mapping: Partial<ColumnMapping>, 
-    availableFields: string[]
+    mapping: Partial<AttributeMapping>,
+    _availableFields: string[]
 ): {
     isValid: boolean;
     suggestions: string[];
@@ -128,17 +133,14 @@ export function validateAutoDetection(
     const suggestions: string[] = [];
     const warnings: string[] = [];
     
-    // Check if required fields were detected
-    const requiredFields: (keyof ColumnMapping)[] = ['longitude', 'latitude'];
+    // AttributeMapping only handles non-spatial attributes
+    // Spatial data comes from GeoJSON geometry, so no longitude/latitude validation needed
     
-    for (const field of requiredFields) {
-        if (!mapping[field]) {
-            suggestions.push(`No ${field} field detected. Please map manually.`);
-        } else {
-            const confidence = getFieldConfidence(mapping[field]!, field);
-            if (confidence < 0.7) {
-                warnings.push(`Low confidence for ${field} mapping: "${mapping[field]}"`);
-            }
+    // Check for time field if provided
+    if (mapping.time) {
+        const confidence = getFieldConfidence(mapping.time, 'time');
+        if (confidence < 0.7) {
+            warnings.push(`Low confidence for time mapping: "${mapping.time}"`);
         }
     }
     

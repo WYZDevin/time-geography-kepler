@@ -1,0 +1,30 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Intersection Result",
+    "color": [76, 175, 80],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.7,
+      "strokeOpacity": 0.9,
+      "thickness": 2,
+      "strokeColor": [27, 94, 32],
+      "colorRange": {
+        "name": "ColorBrewer Greens-6",
+        "type": "sequential",
+        "category": "ColorBrewer",
+        "colors": ["#EDFBF5", "#B7E4C7", "#74C69D", "#52B788", "#40916C", "#2D6A4F"]
+      },
+      "filled": true,
+      "enable3d": false,
+      "stroked": true,
+      "wireframe": false
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "linear"
+  }
+}

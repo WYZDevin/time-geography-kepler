@@ -1,0 +1,30 @@
+{
+  "type": "geojson",
+  "config": {
+    "label": "Union Result",
+    "color": [121, 85, 180],
+    "isVisible": true,
+    "visConfig": {
+      "opacity": 0.6,
+      "strokeOpacity": 0.9,
+      "thickness": 2,
+      "strokeColor": [74, 20, 140],
+      "colorRange": {
+        "name": "ColorBrewer Purples-6",
+        "type": "sequential",
+        "category": "ColorBrewer",
+        "colors": ["#FCFBFD", "#EFE6F5", "#DADAEB", "#BCBDDC", "#9E9AC8", "#756BB1"]
+      },
+      "filled": true,
+      "enable3d": false,
+      "stroked": true,
+      "wireframe": false
+    }
+  },
+  "visualChannels": {
+    "colorField": null,
+    "colorScale": "quantile",
+    "sizeField": null,
+    "sizeScale": "linear"
+  }
+}
