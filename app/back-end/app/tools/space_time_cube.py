@@ -12,15 +12,15 @@ carries `_processed_height` (extrusion) and `time_value` (ISO timestamp).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely.geometry import Polygon
 
-from .base import BaseTool
 from ..constants import PROCESSED_HEIGHT_FIELD
+from .base import BaseTool
 
 STKDE_Z_AXIS_FIELD = "z_axis"
 MAX_GRID_CELLS = 2500  # 50x50 cap
@@ -51,7 +51,9 @@ class SpaceTimeCubeTool(BaseTool):
     def execution_policy(self) -> str:
         return "backend_only"
 
-    def execute(self, gdf: gpd.GeoDataFrame, options: dict, attributes: dict) -> list[gpd.GeoDataFrame]:
+    def execute(
+        self, gdf: gpd.GeoDataFrame, options: dict, attributes: dict
+    ) -> list[gpd.GeoDataFrame]:
         time_field = attributes.get("time")
         if not time_field or time_field not in gdf.columns:
             raise ValueError(f"Time attribute '{time_field}' not found in data")
@@ -70,7 +72,6 @@ class SpaceTimeCubeTool(BaseTool):
         times = pd.to_datetime(pts[time_field])
         t_epoch_ms = (times.astype(np.int64) // 10**6).values  # milliseconds
         t_min_ms = int(t_epoch_ms.min())
-        t_max_ms = int(t_epoch_ms.max())
         t_seconds = ((t_epoch_ms - t_min_ms) / 1000.0).astype(np.float64)
 
         # ----------------------------------------------------------------
@@ -130,12 +131,8 @@ class SpaceTimeCubeTool(BaseTool):
         # ----------------------------------------------------------------
         # Bin points into (col, row, time_slice) and count
         # ----------------------------------------------------------------
-        col_idx = np.clip(
-            ((x - x_min) / cell_size).astype(int), 0, n_cols - 1
-        )
-        row_idx = np.clip(
-            ((y - y_min) / cell_size).astype(int), 0, n_rows - 1
-        )
+        col_idx = np.clip(((x - x_min) / cell_size).astype(int), 0, n_cols - 1)
+        row_idx = np.clip(((y - y_min) / cell_size).astype(int), 0, n_rows - 1)
         time_idx = np.clip(
             np.searchsorted(time_edges[1:], t_seconds, side="right"),
             0,
@@ -151,8 +148,10 @@ class SpaceTimeCubeTool(BaseTool):
         # Z-axis height (matching frontend pattern)
         # ----------------------------------------------------------------
         total_height = _calculate_optimal_z_height(
-            float(x_centers.min()), float(x_centers.max()),
-            float(y_centers.min()), float(y_centers.max()),
+            float(x_centers.min()),
+            float(x_centers.max()),
+            float(y_centers.min()),
+            float(y_centers.max()),
         )
         cell_height = total_height / max(n_time_slices, 1)
 
@@ -192,9 +191,7 @@ class SpaceTimeCubeTool(BaseTool):
         for t_idx in range(n_time_slices):
             z_base = t_idx * cell_height
             time_value_ms = time_nums_ms[t_idx]
-            time_value_iso = datetime.fromtimestamp(
-                time_value_ms / 1000.0, tz=timezone.utc
-            ).isoformat()
+            time_value_iso = datetime.fromtimestamp(time_value_ms / 1000.0, tz=UTC).isoformat()
 
             for row in range(n_rows):
                 for col in range(n_cols):
@@ -205,24 +202,28 @@ class SpaceTimeCubeTool(BaseTool):
                     cx = float(x_centers[col])
                     cy = float(y_centers[row])
 
-                    cell_geom = Polygon([
-                        (cx - half, cy - half, z_base),
-                        (cx + half, cy - half, z_base),
-                        (cx + half, cy + half, z_base),
-                        (cx - half, cy + half, z_base),
-                        (cx - half, cy - half, z_base),
-                    ])
+                    cell_geom = Polygon(
+                        [
+                            (cx - half, cy - half, z_base),
+                            (cx + half, cy - half, z_base),
+                            (cx + half, cy + half, z_base),
+                            (cx - half, cy + half, z_base),
+                            (cx - half, cy - half, z_base),
+                        ]
+                    )
 
-                    all_features.append({
-                        "geometry": cell_geom,
-                        "count": count,
-                        "pm25": _mock_pm25(cx, cy, time_value_ms),
-                        "z": z_base,
-                        STKDE_Z_AXIS_FIELD: z_base,
-                        "time_slice_index": t_idx,
-                        "time_value": time_value_iso,
-                        PROCESSED_HEIGHT_FIELD: cell_height,
-                    })
+                    all_features.append(
+                        {
+                            "geometry": cell_geom,
+                            "count": count,
+                            "pm25": _mock_pm25(cx, cy, time_value_ms),
+                            "z": z_base,
+                            STKDE_Z_AXIS_FIELD: z_base,
+                            "time_slice_index": t_idx,
+                            "time_value": time_value_iso,
+                            PROCESSED_HEIGHT_FIELD: cell_height,
+                        }
+                    )
 
         if not all_features:
             return [gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")]

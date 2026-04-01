@@ -1,4 +1,4 @@
-from app.constants import PROCESSED_TIME_FIELD, PROCESSED_HEIGHT_FIELD, PROCESSED_NEIGHBORS_FIELD
+from app.constants import PROCESSED_HEIGHT_FIELD, PROCESSED_NEIGHBORS_FIELD, PROCESSED_TIME_FIELD
 
 
 def test_time_geography_basic(client, sample_points):
@@ -61,17 +61,21 @@ def test_time_geography_stay_detection(client):
     features = []
     # Cluster of 5 points at same location within 5 minutes
     for i in range(5):
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [-122.42, 37.78]},
-            "properties": {"timestamp": f"2025-01-15T10:{i:02d}:00Z"},
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [-122.42, 37.78]},
+                "properties": {"timestamp": f"2025-01-15T10:{i:02d}:00Z"},
+            }
+        )
     # One far-away point
-    features.append({
-        "type": "Feature",
-        "geometry": {"type": "Point", "coordinates": [-122.0, 37.0]},
-        "properties": {"timestamp": "2025-01-15T11:00:00Z"},
-    })
+    features.append(
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [-122.0, 37.0]},
+            "properties": {"timestamp": "2025-01-15T11:00:00Z"},
+        }
+    )
 
     resp = client.post(
         "/api/v1/tools/time-geography/execute",

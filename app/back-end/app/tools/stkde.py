@@ -12,15 +12,15 @@ Algorithm aligned with the frontend TensorFlow.js implementation in stkde.tsx:
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely.geometry import Polygon
 
-from .base import BaseTool
 from ..constants import PROCESSED_HEIGHT_FIELD
+from .base import BaseTool
 
 STKDE_Z_AXIS_FIELD = "z_axis"
 MAX_GRID_CELLS = 2500  # 50x50 cap, same as frontend
@@ -87,8 +87,6 @@ class STKDETool(BaseTool):
         pts = gdf[mask].reset_index(drop=True)
         if pts.empty:
             raise ValueError("STKDE requires Point geometries")
-
-        n = len(pts)
 
         # Extract coordinates and timestamps (seconds offset from min)
         x = pts.geometry.x.values.astype(np.float64)
@@ -219,8 +217,10 @@ class STKDETool(BaseTool):
         flat_x = x_centers
         flat_y = y_centers
         total_height = _calculate_optimal_z_height(
-            float(flat_x.min()), float(flat_x.max()),
-            float(flat_y.min()), float(flat_y.max()),
+            float(flat_x.min()),
+            float(flat_x.max()),
+            float(flat_y.min()),
+            float(flat_y.max()),
         )
         cell_height = total_height / max(n_time_slices, 1)
         side_length = max(
@@ -241,9 +241,7 @@ class STKDETool(BaseTool):
         for t_idx in range(n_time_slices):
             z_base = t_idx * cell_height
             time_value_ms = time_nums_ms[t_idx] if t_idx < len(time_nums_ms) else time_nums_ms[-1]
-            time_value_iso = datetime.fromtimestamp(
-                time_value_ms / 1000.0, tz=timezone.utc
-            ).isoformat()
+            time_value_iso = datetime.fromtimestamp(time_value_ms / 1000.0, tz=UTC).isoformat()
 
             cls_slice = classification_slices[t_idx]
 
@@ -258,13 +256,15 @@ class STKDETool(BaseTool):
                     half = cell_size / 2
 
                     # 3D polygon with Z = zBase (matching frontend createClassificationGeoJSON)
-                    cell_geom = Polygon([
-                        (cx - half, cy - half, z_base),
-                        (cx + half, cy - half, z_base),
-                        (cx + half, cy + half, z_base),
-                        (cx - half, cy + half, z_base),
-                        (cx - half, cy - half, z_base),
-                    ])
+                    cell_geom = Polygon(
+                        [
+                            (cx - half, cy - half, z_base),
+                            (cx + half, cy - half, z_base),
+                            (cx + half, cy + half, z_base),
+                            (cx - half, cy + half, z_base),
+                            (cx - half, cy - half, z_base),
+                        ]
+                    )
 
                     props = {
                         "classification": classification,
@@ -276,9 +276,7 @@ class STKDETool(BaseTool):
                         "side_length": side_length,
                     }
 
-                    features_by_class[classification - 1].append(
-                        {"geometry": cell_geom, **props}
-                    )
+                    features_by_class[classification - 1].append({"geometry": cell_geom, **props})
 
         outputs = []
         for class_features in features_by_class:

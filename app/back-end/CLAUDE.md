@@ -4,19 +4,30 @@ You are contributing to the **backend exclusively**. This backend is a stateless
 
 Your job is to strictly adhere to the API contract dictated by the frontend `ToolRunMeta` and `ExecutionPolicy` specifications.
 
-## 1) Architecture Constraints
+## 1) Dev Commands
+
+```bash
+cd app/back-end
+uv sync                              # Install deps (pyproject.toml + uv.lock)
+uv run flask --app app run -p 8000   # Start dev server on port 8000
+uv run pytest tests/                 # Run test suite
+```
+
+Requires **Python ≥ 3.12**. Uses **uv** as the package manager.
+
+## 2) Architecture Constraints
 
 - **Language:** Python
-- **Framework:** Flask
+- **Framework:** Flask (app factory in `app/__init__.py` → `create_app()`)
 - **Data Transport:** JSON / GeoJSON (in MVP). You MUST warn the user about binary formats (Parquet/Arrow) for large datasets, but implement the GeoJSON structure first to guarantee backward compatibility with `kepler.gl` in the frontend.
 - **State:** Stateless. **Do not use a database.** Take the request, execute in `pandas`/`geopandas`, return the GeoJSON.
 
-## 2) The Core Payload Contracts
+## 3) The Core Payload Contracts
 
 All tools must respond via `POST /api/v1/tools/<tool_id>/execute`.
 
 ### Standard Response Structure
-Regardless of whether you are running `buffer` or `time-geography`, your JSON response **MUST** follow this exact `ToolRunMeta` layout or the frontend Kepler instance will crash:
+Regardless of the tool , your JSON response **MUST** follow this exact `ToolRunMeta` layout or the frontend Kepler instance will crash:
 
 ```json
 {
@@ -50,7 +61,7 @@ Regardless of whether you are running `buffer` or `time-geography`, your JSON re
 }
 ```
 
-## 3) Endpoint Specifications
+## 4) Endpoint Specifications
 
 ### A) Tool Metadata
 `GET /api/v1/tools`
@@ -73,7 +84,7 @@ Return all registered tools. The `executionPolicy` is vital:
 `GET /api/v1/health`
 Return `{ "status": "healthy", "version": "1.0.0" }`. The frontend's `backendApiService` polls this to enable the network toggle.
 
-## 4) Tool Request Signatures
+## 5) Tool Request Signatures
 
 Your `POST` payload parser for `/execute` must anticipate `request.json` looking like this:
 
@@ -90,7 +101,83 @@ Your `POST` payload parser for `/execute` must anticipate `request.json` looking
 }
 ```
 
-## 5) Implementation Roadmap & Rules
+## 6) Error Response Contract
+
+On failure, the API returns HTTP 400/404 with this shape:
+
+```json
+{
+  "success": false,
+  "toolId": "<tool_id>",
+  "error": "Human-readable error message",
+  "outputs": [],
+  "metadata": {
+    "executionTime": 50,
+    "featureCount": 0,
+    "timestamp": "2025-01-15T12:00:00Z"
+  }
+}
+```
+
+- Unknown tool → 404 with `{"success": false, "error": "Unknown tool: <id>"}`
+- Execution error → 400 with the exception message in `error`
+- The `outputs` array is always empty on failure
+- Always include `metadata.executionTime` even on failure (measure from request start)
+
+## 7) Key Files & Tool Architecture
+
+### Core modules
+
+| File | Purpose |
+|------|---------|
+| `app/__init__.py` | Flask app factory (`create_app()`) — registers CORS and the API blueprint |
+| `app/routes.py` | All API routes on a single Flask Blueprint (`/api/v1`) |
+| `app/tool_registry.py` | Singleton `ToolRegistry` — `register()`, `get()`, `all_tools()`. Auto-registers all tools on import. |
+| `app/utils.py` | GeoJSON↔GeoDataFrame converters (`geojson_to_gdf`, `gdf_to_geojson`), `build_response()` helper, `compute_bbox()` |
+| `app/constants.py` | Shared constants |
+
+### Tool base class (`app/tools/base.py`)
+
+All tools inherit from `BaseTool`:
+
+```python
+class BaseTool(ABC):
+    @property
+    def id(self) -> str: ...           # abstract — unique tool ID (e.g. "stkde")
+    @property
+    def name(self) -> str: ...         # abstract — human-readable name
+    @property
+    def description(self) -> str: ...  # abstract — short description
+    @property
+    def version(self) -> str: ...      # default "1.0.0"
+    @property
+    def execution_policy(self) -> str: ...  # default "hybrid"
+
+    def execute(self, gdf: GeoDataFrame, options: dict, attributes: dict) -> list[GeoDataFrame]:
+        ...  # abstract — return list of result GeoDataFrames
+
+    def metadata(self) -> dict:  # returns the tool info dict for GET /tools
+```
+
+### Registered tools
+
+| File | Tool ID | Policy |
+|------|---------|--------|
+| `app/tools/stkde.py` | `stkde` | hybrid |
+| `app/tools/time_geography.py` | `time-geography` | hybrid |
+| `app/tools/space_time_cube.py` | `space-time-cube` | hybrid |
+| `app/tools/buffer.py` | `buffer` | hybrid |
+| `app/tools/union.py` | `union` | hybrid |
+| `app/tools/intersection.py` | `intersection` | hybrid |
+
+### Adding a new tool
+
+1. Create `app/tools/<name>.py` — subclass `BaseTool`, implement `id`, `name`, `description`, and `execute()`
+2. Register it in `app/tool_registry.py` → `_register_all()`
+3. `execute()` receives a `GeoDataFrame` and must return `list[GeoDataFrame]`
+4. The route handler in `routes.py` handles GeoJSON conversion and response building automatically via `utils.py`
+
+## 8) Implementation Roadmap & Rules
 
 1. **Routing:** Centralize all routes in a `views.py` or `routes.py` connected to a Flask Blueprint.
 2. **Registry Pattern:** Implement a tool registry mapping `tool_id` to a stateless Python execution class/function. Do not put execution code inside the Flask route.

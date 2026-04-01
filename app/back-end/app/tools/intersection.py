@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import geopandas as gpd
 from shapely.geometry import MultiPolygon, Polygon
@@ -32,7 +32,7 @@ class IntersectionTool(BaseTool):
             raise ValueError("Intersection limited to 100 polygons maximum")
 
         preserve = options.get("preserveProperties", False)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         results = []
         for i in range(len(polys)):
@@ -50,12 +50,10 @@ class IntersectionTool(BaseTool):
                 }
                 if preserve:
                     props["feature_a_props"] = {
-                        k: v
-                        for k, v in polys.iloc[i].drop("geometry").items()
+                        k: v for k, v in polys.iloc[i].drop("geometry").items()
                     }
                     props["feature_b_props"] = {
-                        k: v
-                        for k, v in polys.iloc[j].drop("geometry").items()
+                        k: v for k, v in polys.iloc[j].drop("geometry").items()
                     }
 
                 results.append({"geometry": inter, **props})

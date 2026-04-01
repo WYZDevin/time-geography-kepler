@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import geopandas as gpd
 from shapely.geometry import MultiPolygon, Polygon
@@ -29,7 +29,7 @@ class UnionTool(BaseTool):
         if polys.empty:
             raise ValueError("No polygon features provided for union")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         merged = unary_union(polys.geometry)
 
         props = {
@@ -40,9 +40,7 @@ class UnionTool(BaseTool):
 
         if options.get("preserveProperties", False):
             for idx, row in polys.iterrows():
-                props[f"feature_{idx}_props"] = {
-                    k: v for k, v in row.drop("geometry").items()
-                }
+                props[f"feature_{idx}_props"] = {k: v for k, v in row.drop("geometry").items()}
 
         result = gpd.GeoDataFrame([props], geometry=[merged], crs="EPSG:4326")
         return [result]

@@ -64,7 +64,7 @@ export class IntersectionTool implements SimpleTool {
       for (let i = 0; i < polygonFeatures.length - 1; i++) {
         for (let j = i + 1; j < polygonFeatures.length; j++) {
           try {
-            const intersection = turf.intersect(polygonFeatures[i] as any, polygonFeatures[j] as any);
+            const intersection = turf.intersect(turf.featureCollection([polygonFeatures[i] as any, polygonFeatures[j] as any]));
             if (intersection) {
               const properties: any = {
                 _intersection_operation: true,

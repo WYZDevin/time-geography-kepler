@@ -3,7 +3,7 @@ import time
 from flask import Blueprint, jsonify, request
 
 from .tool_registry import registry
-from .utils import geojson_to_gdf, gdf_to_geojson, build_response
+from .utils import build_response, gdf_to_geojson, geojson_to_gdf
 
 api = Blueprint("api", __name__, url_prefix="/api/v1")
 
@@ -37,19 +37,21 @@ def execute_tool(tool_id: str):
         result_gdfs = tool.execute(gdf, options, attributes)
         outputs = [gdf_to_geojson(r) for r in result_gdfs]
     except Exception as exc:
-        return jsonify({
-            "success": False,
-            "toolId": tool_id,
-            "error": str(exc),
-            "outputs": [],
-            "metadata": {
-                "executionTime": int((time.time() - start) * 1000),
-                "featureCount": 0,
-                "timestamp": __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat(),
-            },
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "toolId": tool_id,
+                "error": str(exc),
+                "outputs": [],
+                "metadata": {
+                    "executionTime": int((time.time() - start) * 1000),
+                    "featureCount": 0,
+                    "timestamp": __import__("datetime")
+                    .datetime.now(__import__("datetime").timezone.utc)
+                    .isoformat(),
+                },
+            }
+        ), 400
 
     resp = build_response(
         tool=tool,

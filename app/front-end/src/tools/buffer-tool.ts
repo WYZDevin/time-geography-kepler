@@ -108,7 +108,7 @@ export class BufferTool implements SimpleTool {
         try {
           let dissolvedFeature: GeoJSON.Feature = buffers[0];
           for (let i = 1; i < buffers.length; i++) {
-            const union = turf.union(dissolvedFeature as any, buffers[i] as any);
+            const union = turf.union(turf.featureCollection([dissolvedFeature as any, buffers[i] as any]));
             if (union) {
               dissolvedFeature = union;
             }

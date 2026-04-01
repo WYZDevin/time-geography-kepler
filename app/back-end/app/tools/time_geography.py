@@ -1,12 +1,11 @@
 import math
-from datetime import datetime, timezone
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+from ..constants import PROCESSED_HEIGHT_FIELD, PROCESSED_NEIGHBORS_FIELD, PROCESSED_TIME_FIELD
 from .base import BaseTool
-from ..constants import PROCESSED_TIME_FIELD, PROCESSED_HEIGHT_FIELD, PROCESSED_NEIGHBORS_FIELD
 
 
 def _parse_timestamps(gdf: gpd.GeoDataFrame, time_field: str) -> np.ndarray:
@@ -91,10 +90,12 @@ class TimeGeographyTool(BaseTool):
             time_window = options.get("timeWindow", 300_000)  # ms
 
             stay_indices = []
-            coords = np.column_stack([
-                gdf.geometry.x.values,
-                gdf.geometry.y.values,
-            ])
+            coords = np.column_stack(
+                [
+                    gdf.geometry.x.values,
+                    gdf.geometry.y.values,
+                ]
+            )
 
             for i in range(n):
                 neighbor_count = 0

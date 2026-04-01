@@ -50,13 +50,15 @@ def sample_polygons():
                 "type": "Feature",
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": [[
-                        [-122.42, 37.77],
-                        [-122.41, 37.77],
-                        [-122.41, 37.78],
-                        [-122.42, 37.78],
-                        [-122.42, 37.77],
-                    ]],
+                    "coordinates": [
+                        [
+                            [-122.42, 37.77],
+                            [-122.41, 37.77],
+                            [-122.41, 37.78],
+                            [-122.42, 37.78],
+                            [-122.42, 37.77],
+                        ]
+                    ],
                 },
                 "properties": {"name": "A"},
             },
@@ -64,13 +66,15 @@ def sample_polygons():
                 "type": "Feature",
                 "geometry": {
                     "type": "Polygon",
-                    "coordinates": [[
-                        [-122.415, 37.775],
-                        [-122.405, 37.775],
-                        [-122.405, 37.785],
-                        [-122.415, 37.785],
-                        [-122.415, 37.775],
-                    ]],
+                    "coordinates": [
+                        [
+                            [-122.415, 37.775],
+                            [-122.405, 37.775],
+                            [-122.405, 37.785],
+                            [-122.415, 37.785],
+                            [-122.415, 37.775],
+                        ]
+                    ],
                 },
                 "properties": {"name": "B"},
             },
@@ -82,18 +86,22 @@ def sample_polygons():
 def three_polygons(sample_polygons):
     """Three overlapping polygons."""
     features = list(sample_polygons["features"])
-    features.append({
-        "type": "Feature",
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[
-                [-122.418, 37.772],
-                [-122.408, 37.772],
-                [-122.408, 37.782],
-                [-122.418, 37.782],
-                [-122.418, 37.772],
-            ]],
-        },
-        "properties": {"name": "C"},
-    })
+    features.append(
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [-122.418, 37.772],
+                        [-122.408, 37.772],
+                        [-122.408, 37.782],
+                        [-122.418, 37.782],
+                        [-122.418, 37.772],
+                    ]
+                ],
+            },
+            "properties": {"name": "C"},
+        }
+    )
     return {"type": "FeatureCollection", "features": features}

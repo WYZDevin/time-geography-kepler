@@ -4,8 +4,7 @@ and inspect the output structure in detail.
 """
 
 import random
-import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import geopandas as gpd
 import numpy as np
@@ -19,7 +18,7 @@ np.random.seed(42)
 
 center_lng, center_lat = -122.4, 37.8
 n_points = 20
-base_time = datetime(2025, 6, 15, 0, 0, 0, tzinfo=timezone.utc)
+base_time = datetime(2025, 6, 15, 0, 0, 0, tzinfo=UTC)
 
 points = []
 timestamps = []
@@ -71,7 +70,7 @@ for idx, r in enumerate(results):
 
     print(f"  Feature count: {len(r)}")
     print(f"  Columns: {list(r.columns)}")
-    print(f"  Dtypes:")
+    print("  Dtypes:")
     for col in r.columns:
         print(f"    {col}: {r[col].dtype}")
     print()
@@ -143,7 +142,7 @@ for idx, r in enumerate(results):
             print(f"    First coord: {ring[0]}")
             print(f"    Coord dimensions: {len(ring[0])}")
         print(f"    Properties keys: {list(feat['properties'].keys())}")
-        print(f"    Properties values:")
+        print("    Properties values:")
         for k, v in feat["properties"].items():
             print(f"      {k!r}: {v!r}  (type: {type(v).__name__})")
     print()

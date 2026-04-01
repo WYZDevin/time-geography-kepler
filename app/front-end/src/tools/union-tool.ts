@@ -59,7 +59,7 @@ export class UnionTool implements SimpleTool {
       const preserveProperties = options.preserveProperties !== false;
 
       for (let i = 1; i < polygonFeatures.length; i++) {
-        const unionResult = turf.union(result as any, polygonFeatures[i] as any);
+        const unionResult = turf.union(turf.featureCollection([result as any, polygonFeatures[i] as any]));
         if (unionResult) {
           result = unionResult;
           

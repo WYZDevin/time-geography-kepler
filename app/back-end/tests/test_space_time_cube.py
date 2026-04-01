@@ -1,9 +1,9 @@
 from app.constants import PROCESSED_HEIGHT_FIELD
 
 
-def test_stkde_basic(client, sample_points):
+def test_space_time_cube_basic(client, sample_points):
     resp = client.post(
-        "/api/v1/tools/stkde/execute",
+        "/api/v1/tools/space-time-cube/execute",
         json={
             "data": sample_points,
             "attributes": {"time": "timestamp"},
@@ -12,34 +12,33 @@ def test_stkde_basic(client, sample_points):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["success"] is True
-    assert data["toolId"] == "stkde"
+    assert data["toolId"] == "space-time-cube"
 
-    # Should return 3 FeatureCollections (high, medium, low)
-    assert len(data["outputs"]) == 3
+    # Should return a single FeatureCollection
+    assert len(data["outputs"]) == 1
+
+    fc = data["outputs"][0]
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) > 0
 
     bbox = data["runMeta"]["summary"]["bbox"]
     assert bbox is not None
     assert len(bbox) == 4
 
-    # At least one output should have features
-    total_features = sum(len(fc["features"]) for fc in data["outputs"])
-    assert total_features > 0
-
-    # Check properties on a non-empty output
-    for fc in data["outputs"]:
-        if fc["features"]:
-            props = fc["features"][0]["properties"]
-            assert "classification" in props
-            assert "z" in props
-            assert PROCESSED_HEIGHT_FIELD in props
-            assert "side_length" in props
-            assert "time_value" in props
-            break
+    # Check key properties on the first feature
+    props = fc["features"][0]["properties"]
+    assert "count" in props
+    assert "pm25" in props
+    assert "z" in props
+    assert "z_axis" in props
+    assert "time_slice_index" in props
+    assert "time_value" in props
+    assert PROCESSED_HEIGHT_FIELD in props
 
 
-def test_stkde_missing_time_attr(client, sample_points):
+def test_space_time_cube_missing_time_attr(client, sample_points):
     resp = client.post(
-        "/api/v1/tools/stkde/execute",
+        "/api/v1/tools/space-time-cube/execute",
         json={
             "data": sample_points,
             "attributes": {"time": "nonexistent"},
@@ -49,9 +48,9 @@ def test_stkde_missing_time_attr(client, sample_points):
     assert resp.get_json()["success"] is False
 
 
-def test_stkde_rejects_polygons(client, sample_polygons):
+def test_space_time_cube_rejects_polygons(client, sample_polygons):
     resp = client.post(
-        "/api/v1/tools/stkde/execute",
+        "/api/v1/tools/space-time-cube/execute",
         json={
             "data": sample_polygons,
             "attributes": {"time": "timestamp"},
@@ -61,7 +60,22 @@ def test_stkde_rejects_polygons(client, sample_polygons):
     assert resp.get_json()["success"] is False
 
 
-def test_stkde_larger_dataset(client):
+def test_space_time_cube_custom_options(client, sample_points):
+    resp = client.post(
+        "/api/v1/tools/space-time-cube/execute",
+        json={
+            "data": sample_points,
+            "attributes": {"time": "timestamp"},
+            "options": {"cellSize": 0.005, "timeSlices": 5},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert len(data["outputs"]) == 1
+
+
+def test_space_time_cube_larger_dataset(client):
     """Test with more points to ensure grid computation works."""
     import random
 
@@ -82,7 +96,7 @@ def test_stkde_larger_dataset(client):
             }
         )
     resp = client.post(
-        "/api/v1/tools/stkde/execute",
+        "/api/v1/tools/space-time-cube/execute",
         json={
             "data": {"type": "FeatureCollection", "features": features},
             "attributes": {"time": "timestamp"},
@@ -91,4 +105,4 @@ def test_stkde_larger_dataset(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["success"] is True
-    assert len(data["outputs"]) == 3
+    assert len(data["outputs"]) == 1

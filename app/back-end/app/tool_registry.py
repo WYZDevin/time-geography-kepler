@@ -21,12 +21,19 @@ registry = ToolRegistry()
 def _register_all():
     from app.tools.buffer import BufferTool
     from app.tools.intersection import IntersectionTool
-    from app.tools.union import UnionTool
-    from app.tools.time_geography import TimeGeographyTool
-    from app.tools.stkde import STKDETool
     from app.tools.space_time_cube import SpaceTimeCubeTool
+    from app.tools.stkde import STKDETool
+    from app.tools.time_geography import TimeGeographyTool
+    from app.tools.union import UnionTool
 
-    for cls in (BufferTool, IntersectionTool, UnionTool, TimeGeographyTool, STKDETool, SpaceTimeCubeTool):
+    for cls in (
+        BufferTool,
+        IntersectionTool,
+        UnionTool,
+        TimeGeographyTool,
+        STKDETool,
+        SpaceTimeCubeTool,
+    ):
         registry.register(cls())
 
 

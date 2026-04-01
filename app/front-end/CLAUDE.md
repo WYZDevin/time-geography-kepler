@@ -1,246 +1,254 @@
-# AI Coding Instructions (Front-End): Tool-Specific Execution Modes
+# AI Coding Instructions: Front-End (React + Kepler.gl)
 
-You are contributing to the **front-end only** (React 18 + TypeScript + Vite + Redux Toolkit + Kepler.gl + Turf.js + Tailwind). The app supports analysis tools that can execute in different environments. Your job is to implement tooling in a way that is **execution-agnostic** at the UI level but **execution-specific** at the runner level.
+**Stack:** React 18, TypeScript, Vite, Redux Toolkit, Kepler.gl, Turf.js, Tailwind CSS
 
-This tool is an extension of kepler.gl. When adding/removing/editing items on kepler.gl, please check the documentation for details: https://docs.kepler.gl/docs/api-reference 
+This app is a geospatial analysis platform built on top of Kepler.gl. It provides analysis **tools** (STKDE, Time Geography, Space-Time Cube, Buffer, Union, Intersection) that can run either **in the browser** or on a **Flask backend**, depending on each tool's execution policy.
 
-## 1) Tool-Specific Execution Policy (Hard Rule)
+When adding/removing/editing Kepler.gl layers, datasets, or map state, check: https://docs.kepler.gl/docs/api-reference
 
-Every tool must declare an explicit **execution policy**:
+---
 
-* `frontend_only`: tool can run only in the browser (main thread / Web Worker).
-* `backend_only`: tool can run only via remote execution.
-* `hybrid`: tool supports both; user can choose and UI may recommend a default.
+## 0) Dev Commands
 
-### Canonical policy type
-
-```ts
-type ExecutionMode = "frontend" | "backend";
-type ExecutionPolicy = "frontend_only" | "backend_only" | "hybrid";
+```bash
+cd app/front-end
+npm install        # Install dependencies
+npm run dev        # Vite dev server → localhost:5173
+npm run build      # tsc -b && vite build → dist/
+npm run lint       # ESLint
+npm run preview    # Preview production build
 ```
 
-### Tool capability declaration (required)
+Environment: `.env` must contain `VITE_BACKEND_URL` (default `http://localhost:8000`). See `.env.example` at repo root for all vars.
 
-Each tool definition must include:
+---
 
-* `executionPolicy`
-* (optional) `defaultMode` when `hybrid`
-* (optional) `frontendLimits` / `backendNotes` for UI guidance
+## 1) Key Files & Architecture
 
-Example shape:
+### Interfaces
+
+| File | Purpose |
+|------|---------|
+| `src/interfaces/simple-tool.ts` | Core types: `SimpleTool`, `ToolCapabilities`, `ToolRunMeta`, `ExecutionMode`, `ExecutionPolicy` |
+| `src/interfaces/data-interfaces.ts` | `FeatureCollection`, `GeoJSONFeature` |
+| `src/interfaces/attribute-mapping.ts` | `AttributeMapping` for field bindings |
+
+### Services (execution layer)
+
+| File | Purpose |
+|------|---------|
+| `src/services/analysis-engine.ts` | **Entry point for all tool runs.** Routes to frontend (`tool.analyze()`) or backend (`backendApiService.executeTool()`) based on `request.mode`. Returns `AnalysisResult`. |
+| `src/services/backend-api-service.ts` | HTTP client for the Flask backend. Three endpoints: `GET /health`, `GET /tools`, `POST /tools/{id}/execute`. Never throws — returns `null`/error objects. |
+| `src/services/execution-resolver.ts` | Determines what modes are available for a tool by combining the frontend registry + backend tool list + backend health. Exports `resolveToolCapabilities()` (pure) and `useResolvedCapabilities()` (React hook). |
+| `src/services/backend-normalizer.ts` | Converts backend responses to frontend format: remaps field names (`_processed_height` -> `_height`), injects Kepler.gl layer configs. Tool-specific normalizers for time-geography, STKDE, space-time-cube, and a generic path for buffer/union/intersection. |
+
+### Tools
+
+| File | Purpose |
+|------|---------|
+| `src/tools/index.ts` | Registers all tools into the registry on import |
+| `src/tools/<tool-name>.ts` | Individual tool classes implementing `SimpleTool` |
+| `src/utils/tool-registry.ts` | Singleton `ToolRegistry` — `register()`, `getTool()`, `getAllTools()`, `getToolsByCategory()` |
+
+### State
+
+| File | Purpose |
+|------|---------|
+| `src/stores/store.ts` | Redux store root |
+| `src/stores/settings-slice.ts` | Backend availability, backend tool list |
+
+### Other directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/contexts/` | React contexts — `app-context.tsx` (app state), `color-context.tsx` (color schemes) |
+| `src/hooks/` | Custom hooks — `use-backend-init.ts` (backend health polling), `use-keyboard-shortcuts.ts` |
+| `src/data-processors/` | Data transformation logic (e.g. `stkde.tsx` for STKDE output processing) |
+| `src/lib/` | Shared utilities (`utils.ts` — cn() helper, etc.) |
+| `src/visualization-templates/` | Kepler.gl layer config JSON templates per tool (time-geography, buffer-zones, etc.) |
+
+---
+
+## 2) Execution Policy (Hard Rule)
+
+Every tool **must** declare an `executionPolicy` in its `capabilities`:
 
 ```ts
-type ToolCapabilities = {
+type ExecutionMode = 'frontend' | 'backend';
+type ExecutionPolicy = 'frontend_only' | 'backend_only' | 'hybrid';
+
+interface ToolCapabilities {
   executionPolicy: ExecutionPolicy;
-  defaultMode?: ExecutionMode; // only for hybrid
-  // Optional: used by UI to warn/recommend; keep lightweight.
+  defaultMode?: ExecutionMode;       // only meaningful for 'hybrid'
   recommendations?: {
     frontendMaxRows?: number;
     frontendMaxFeatures?: number;
     notes?: string[];
   };
-};
+}
 ```
 
-**Do not infer capabilities from tool name or dataset size.** The policy is the source of truth.
+**The policy is the source of truth.** Do not infer capabilities from tool name or dataset size.
 
 ---
 
-## 2) UI Behavior for Execution Modes
+## 3) How Tool Execution Works
 
-### A) Tool picker / tool page
+### Data flow
 
-* If `frontend_only`: do not show a backend toggle.
-* If `backend_only`: do not show a frontend toggle; show a clear “Runs on backend” badge.
-* If `hybrid`:
-
-  * show a mode selector: **Run in Browser** / **Run on Backend**
-  * preselect `defaultMode` (or fall back to Browser)
-  * optionally show a recommendation banner (“Recommended: Backend for large datasets”)
-
-### B) Validation and messaging
-
-* Validation is shared (same param schema), but errors can be mode-specific:
-
-  * If user selects a disallowed mode, block run and show:
-
-    * “This tool is backend-only.” or “This tool is frontend-only.”
-* Warnings should be aggregated (counts + examples), never per-row spam.
-
-### C) Results view must be mode-agnostic
-
-Rendering consumes datasets + metadata only.
-Never branch visualization behavior on mode.
-
----
-
-## 3) Runner Architecture (Where Switching Happens)
-
-**Hard rule:** The execution switch belongs to the **tool runner**, not the tool UI.
-
-Implement a single entry point:
-
-```ts
-runTool({
-  toolId,
-  mode,          // "frontend" | "backend"
-  datasetIds,
-  params,
-}): Promise<ToolRunResult>
+```
+UI component
+  -> AnalysisEngine.execute({ toolId, data, options, attributes, mode })
+     |
+     |-- mode === 'frontend'
+     |     -> toolRegistry.getTool(toolId).analyze(data, options, attributes)
+     |     -> builds ToolRunMeta locally
+     |     -> returns AnalysisResult
+     |
+     |-- mode === 'backend'
+           -> backendApiService.executeTool(toolId, data, options, attributes)
+           -> normalizeBackendResponse(raw, toolId)   // field remap + layer config injection
+           -> returns AnalysisResult
 ```
 
-### Routing logic
+### Mode resolution (what the UI should show)
 
-1. Load tool definition from registry.
-2. Enforce `executionPolicy`.
-3. Dispatch:
+`execution-resolver.ts` merges three inputs:
+1. Does the frontend registry have this tool? (`canRunFrontend`)
+2. Is the backend online? (`backendAvailable` from Redux)
+3. Does the backend advertise this tool? (`backendTools` from Redux)
 
-   * `frontend` → run in-browser implementation (prefer Web Worker for heavy compute).
-   * `backend` → call existing remote client wrapper (job-based if async).
+Result: `ResolvedCapabilities { canRunFrontend, canRunBackend, effectivePolicy, defaultMode, isDisabled }`
 
-**Do not implement backend endpoints or server logic.**
-If there is no existing remote client wrapper in the repo, do not add new network plumbing unless explicitly asked.
+**UI rules:**
+- `frontend_only` -> no backend toggle
+- `backend_only` -> no frontend toggle; show "Runs on backend" badge; disable if backend offline
+- `hybrid` -> show mode selector; preselect `defaultMode` (fallback: `'frontend'`)
 
 ---
 
-## 4) Tool Implementation Layout
+## 4) Backend Communication
 
-A tool should be structured to separate:
+The backend client already exists in `backend-api-service.ts`. It targets the Flask API at `VITE_BACKEND_URL` (default `http://localhost:8000`).
 
-* **Definition**: id/name/desc/inputSpec/paramSchema/capabilities
-* **Frontend implementation** (if supported): pure compute functions + optional worker adapter
-* **Backend adapter** (if supported): thin call to existing remote client wrapper
+### Endpoints used by the frontend
 
-### Required exports per tool module
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/v1/health` | Check if backend is reachable (5s timeout) |
+| `GET` | `/api/v1/tools` | Fetch list of backend-available tools with their `executionPolicy` |
+| `POST` | `/api/v1/tools/{toolId}/execute` | Run a tool. Body: `{ data, options, attributes, sourceDatasetIds }` |
 
-* `toolDef` (includes capabilities + schemas)
-* `runFrontend()` only if policy includes frontend
-* `runBackend()` only if policy includes backend (should delegate to existing client wrapper)
+### Backend response normalization
 
-Example:
+The backend returns raw GeoJSON with its own field names. The normalizer (`backend-normalizer.ts`) handles:
+
+- **Field remapping:** `_processed_height` -> `_height`, `_processed_time` -> `_time_order`, `_processed_neighbors` -> `_neighbors`
+- **Layer config injection:** Backend doesn't embed Kepler.gl configs; the normalizer creates them per tool
+- **Tool-specific logic:** Separate normalizers for `time-geography`, `stkde`, `space-time-cube`; generic handler for `buffer`/`union`/`intersection`
+
+**When adding a new tool that supports backend:** add a case in `normalizeFeatureCollection()` if it needs field remapping or special layer configs. Generic tools can fall through to `normalizeGeneric()`.
+
+---
+
+## 5) Adding or Updating a Tool
+
+### Checklist
+
+1. **Create tool class** in `src/tools/<tool-name>.ts` implementing `SimpleTool`
+2. **Set `executionPolicy`** in `capabilities` — this is required
+3. **Register** in `src/tools/index.ts`
+4. **Implement `analyze()`** for the frontend path (if `frontend_only` or `hybrid`)
+5. **Add normalizer case** in `backend-normalizer.ts` (if `backend_only` or `hybrid` and needs field remapping)
+6. **UI:** ensure the tool picker respects `ResolvedCapabilities` for toggle visibility
+7. **Output contract:** `AnalysisResult` with `outputs: FeatureCollection[]`, `metadata`, and `runMeta: ToolRunMeta`
+
+### SimpleTool interface (what to implement)
 
 ```ts
-export const toolDef: SimpleTool = { ...capabilities... };
-
-export async function runFrontend(...) { ... }   // if frontend_only or hybrid
-export async function runBackend(...) { ... }    // if backend_only or hybrid
+interface SimpleTool {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: 'visualization' | 'analysis' | 'processing';
+  version: string;
+  capabilities: ToolCapabilities;
+  attributeMapping?: AttributeMapping;
+  getOptionSchema(): ToolOptionSchema[];
+  analyze(data: FeatureCollection, options: Record<string, unknown>, attributes?: AttributeMapping): Promise<FeatureCollection[]>;
+}
 ```
 
----
-
-## 5) Output Contract (Must Match Across Modes)
-
-Regardless of execution mode, a tool run returns:
-
-* `datasets`: derived datasets (GeoJSON or tables)
-* `meta`: `ToolRunMeta` lineage + summary
-* optional `layerHints` (minimal; do not hardcode colors)
-
-### ToolRunMeta (required)
+### ToolRunMeta (built by AnalysisEngine for frontend runs, returned by backend for backend runs)
 
 ```ts
-type ToolRunMeta = {
+interface ToolRunMeta {
   toolName: string;
   toolVersion: string;
-  runAt: number; // epoch ms
+  runAt: number;                    // epoch ms
   sourceDatasetIds: string[];
   params: Record<string, unknown>;
   summary: {
     inputCount: number;
     outputCount: number;
     timeRange?: { min: number; max: number };
-    bbox?: [number, number, number, number];
+    bbox?: [number, number, number, number];  // [minX, minY, maxX, maxY]
   };
   warnings?: string[];
-};
+}
 ```
 
-**Backend runs must return the same schema.** If remote results differ, normalize them in the front-end adapter before storing.
+---
+
+## 6) Browser Compute Rules (Frontend Mode)
+
+### Web Workers
+
+Move computation to a Web Worker if it will exceed ~50-100ms on the main thread:
+- Large loops over points/cells
+- STKDE grids, cube binning
+- Polygon unions/intersections on many features
+
+Worker rules:
+- Pure compute only (no DOM, no UI logic)
+- Message format must include `jobId`
+- Support progress updates when feasible
+
+### Performance
+
+- Avoid O(N^2) on raw points/features
+- Prefer binning/indexing over pairwise comparisons
+- Cap grid/cell counts and warn when clamped
 
 ---
 
-## 6) Browser Compute Standards (Frontend Mode)
+## 7) State Management (Redux)
 
-### Web Worker requirement
+- Store tool runs and derived datasets with stable IDs
+- Persist: tool id, params, selected mode, run metadata, warnings, source dataset refs
+- Use selectors for UI read access
+- Do not store duplicate large arrays; keep references
 
-Any operation likely to exceed ~50–100ms on the main thread must run in a worker:
-
-* large loops over points/cells
-* STKDE grids / cube binning
-* polygon unions/intersections on non-trivial feature counts
-
-Workers:
-
-* do pure compute only (no UI logic)
-* message format must include `jobId`
-* support progress updates when feasible
-
-### Performance guardrails
-
-* avoid O(N²) on raw points/features
-* prefer binning/indexing over pairwise comparisons
-* cap grid/cell counts and warn when clamped
+Backend state lives in `settings-slice.ts`:
+- `backendAvailable: boolean` — updated by health check
+- `backendTools: BackendToolInfo[]` — updated by `GET /tools`
 
 ---
 
-## 7) Mode-Specific Tool Constraints (How to Think)
+## 8) Visualization Rules
 
-Some tools are inherently better in one mode; the **tool declares this** via `executionPolicy`.
-
-* `frontend_only` examples:
-
-  * lightweight transformations
-  * small-to-medium buffer operations
-  * quick trajectory visualization transforms
-
-* `backend_only` examples:
-
-  * extremely large union/intersection dissolves
-  * fine-resolution STKDE across long time spans
-  * any analysis requiring libraries not available in browser
-
-* `hybrid` examples:
-
-  * Time Geography path + staypoint extraction (browser for small; backend for big)
-  * Cube binning + hotspot detection (browser for small; backend for big)
-
-**Important:** Do not hardcode these assumptions globally. Only enforce what the tool declares.
-
----
-
-## 8) State Management Requirements (Redux)
-
-* Store tool runs and derived datasets in Redux with stable IDs.
-* Persist:
-
-  * tool id + params + selected mode
-  * run metadata + warnings
-  * source dataset references
-* Prefer selectors for UI read access.
-* Do not store huge duplicate arrays; keep references where possible.
+- Results rendering is **mode-agnostic**: same visualization logic for frontend and backend results
+- Never branch visualization behavior on execution mode
+- Layer configs come from either the tool itself (frontend) or the normalizer (backend) — Kepler.gl receives the same format either way
+- Do not hardcode colors in tool logic; use constants from `src/utils/constants.ts`
 
 ---
 
 ## 9) What NOT To Do
 
-* Do not implement backend services, Flask code, or new endpoints.
-* Do not add network calls outside existing remote-client modules.
-* Do not hide remote execution behind automatic switching:
-
-  * only `hybrid` tools may suggest a default
-  * user must be able to see and control the selected mode
-
----
-
-## 10) Checklist When Adding/Updating a Tool
-
-1. Add/verify `executionPolicy` in tool definition.
-2. Ensure UI correctly shows/hides mode selector based on policy.
-3. Implement `runFrontend` and/or `runBackend` according to policy.
-4. Ensure output schema + `ToolRunMeta` match expected format.
-5. Add tests for:
-
-   * policy enforcement
-   * deterministic output (frontend)
-   * result normalization (backend adapter)
-6. Ensure Kepler visualization works without mode-specific logic.
+- **Do not write Flask/Python code** — backend lives in `app/back-end/`, a separate codebase
+- **Do not add new HTTP endpoints** or network calls outside `backend-api-service.ts`
+- **Do not bypass the execution resolver** — always use `resolveToolCapabilities()` or `useResolvedCapabilities()` to determine available modes
+- **Do not auto-switch modes** without user awareness — only `hybrid` tools may suggest a default; user must see and control the mode
+- **Do not branch visualization on mode** — results rendering must be identical regardless of where computation happened

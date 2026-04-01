@@ -3,7 +3,7 @@ def test_list_tools(client):
     assert resp.status_code == 200
     data = resp.get_json()
     tools = data["tools"]
-    assert len(tools) == 5
+    assert len(tools) == 6
 
     ids = {t["id"] for t in tools}
     assert ids == {
@@ -12,6 +12,7 @@ def test_list_tools(client):
         "union-analysis",
         "time-geography",
         "stkde",
+        "space-time-cube",
     }
 
     for t in tools:

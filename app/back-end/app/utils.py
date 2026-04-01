@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 import time
+from datetime import UTC, datetime
 
 import geopandas as gpd
 from shapely.geometry import mapping, shape
@@ -22,11 +22,13 @@ def gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict:
     for _, row in gdf.iterrows():
         geom = row.geometry
         props = {k: _serialize(v) for k, v in row.drop("geometry").items()}
-        features.append({
-            "type": "Feature",
-            "geometry": mapping(geom),
-            "properties": props,
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": mapping(geom),
+                "properties": props,
+            }
+        )
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -69,7 +71,7 @@ def build_response(
 ) -> dict:
     """Build the standard AnalysisResult response dict."""
     execution_time = int((time.time() - start_time) * 1000)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     output_count = sum(len(fc.get("features", [])) for fc in outputs)
     bbox = compute_bbox(outputs)
 
