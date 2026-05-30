@@ -39,8 +39,8 @@ features:
     link: /reference/architecture
   - icon: 🐳
     title: One-Command Setup
-    details: Spin up the whole stack with Docker Compose, or run the dev servers directly. Deploy the docs to GitHub Pages.
-    link: /reference/deployment
+    details: Install Docker, run one command, and the whole platform starts on your computer — no coding required.
+    link: /guide/getting-started
 ---
 
 ## What can I do with it?
