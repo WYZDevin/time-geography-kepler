@@ -1,14 +1,16 @@
 # Time Geography Kepler
 
-A geospatial analysis platform built on [Kepler.gl](https://kepler.gl/) for space-time trajectory analysis. Upload CSV data, run analysis tools in the browser or on an optional server, and visualize results on an interactive map.
+A geospatial analysis platform built with [deck.gl](https://deck.gl/) for space-time trajectory analysis. Upload CSV data, run analysis tools in the browser or on an optional server, and visualize results on an interactive map.
 
-The platform ships six tools -- STKDE, Time Geography, Space-Time Cube, Buffer, Union, and Intersection -- each capable of running client-side (Turf.js) or server-side (geopandas), depending on its execution policy.
+📖 **[Documentation site →](https://wyzdevin.github.io/time-geography-kepler/)** (source in [`docs/`](docs/))
+
+The platform ships four analysis tools -- 3D Trajectory, Space-Time Kernel Density (STKDE), Space-Time Cube, and Space-Time Prism -- running client-side or on the optional geopandas backend, depending on each tool's execution policy.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Frontend ["Frontend (React + Kepler.gl)"]
+    subgraph Frontend ["Frontend (React + deck.gl)"]
         CSV["CSV Upload"] --> Redux["Redux Store\n(data-slice)"]
         Redux --> ToolSelect["User selects tool"]
         ToolSelect --> Resolver["ExecutionResolver\nfrontend registry + backend health\n+ backend tools"]
@@ -19,7 +21,7 @@ flowchart TD
         FE --> Results["AnalysisResult\n(FeatureCollection[])"]
         API --> Norm["backend-normalizer\nfield remap + layer config"]
         Norm --> Results
-        Results --> Kepler["Kepler.gl\nmap visualization"]
+        Results --> DeckMap["deck.gl + maplibre\nmap visualization"]
     end
 
     subgraph Backend ["Backend (Flask API)"]
@@ -37,7 +39,7 @@ flowchart TD
 |-------|-----------|---------|
 | UI Framework | React 18 + TypeScript | Component architecture |
 | Bundler | Vite 6 | Dev server and production builds |
-| Map Engine | Kepler.gl 3.1 | WebGL geospatial visualization |
+| Map Engine | deck.gl 9, react-map-gl 7, maplibre-gl 4 | WebGL geospatial visualization |
 | State | Redux Toolkit | Centralized app state |
 | Geospatial (browser) | Turf.js 7 | Client-side spatial analysis |
 | Styling | Tailwind CSS 4 | Utility-first CSS |
@@ -49,7 +51,25 @@ flowchart TD
 
 ## Quick Start
 
-### Prerequisites
+### Run with Docker (recommended)
+
+The whole stack (Flask backend + Nginx-served frontend) runs with one command — only [Docker](https://docs.docker.com/get-docker/) with Compose v2 is required:
+
+```bash
+docker compose up --build      # builds both images and starts them
+```
+
+Then open **http://localhost:5173**. The backend is on **http://localhost:8000** and the frontend is wired to it automatically.
+
+```bash
+docker compose down            # stop and remove the containers
+```
+
+> The frontend bakes `VITE_BACKEND_URL` at build time (default `http://localhost:8000`). To target a different backend, edit the `args` under the `frontend` service in `docker-compose.yml` and rebuild.
+
+To run from pre-built images instead of building locally, see `docker-compose.prod.yml` (set the `image:` names to your registry first).
+
+### Prerequisites (manual / dev mode)
 
 - **Node.js** (see `volta` config in `package.json` for pinned version)
 - **Python >= 3.12**
@@ -105,6 +125,7 @@ Error responses return HTTP 400/404 with `{ "success": false, "error": "...", "o
 | `buffer` | Buffer | `hybrid` | Generate buffer zones around features |
 | `union` | Union | `hybrid` | Merge overlapping geometries |
 | `intersection` | Intersection | `hybrid` | Compute geometric intersections |
+| `space-time-prism` | Space-Time Prism | `hybrid` | Compute space-time prisms for movement constraints |
 
 **Execution policies:**
 - `frontend_only` -- runs exclusively in the browser
@@ -134,7 +155,7 @@ time-geography-kepler/
 │   │   │   ├── stores/                   # Redux slices (data, settings, workflow)
 │   │   │   ├── tools/                    # Tool implementations (SimpleTool classes)
 │   │   │   ├── utils/                    # Constants, tool registry, data helpers
-│   │   │   └── visualization-templates/  # Kepler.gl layer config JSON per tool
+│   │   │   └── visualization-templates/  # deck.gl layer config templates per tool
 │   │   ├── package.json
 │   │   ├── vite.config.ts
 │   │   └── tsconfig.json

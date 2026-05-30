@@ -1,0 +1,31 @@
+{
+  "name": "time-geography-kepler",
+  "version": "1.0.0",
+  "description": "A geospatial analysis platform built with [deck.gl](https://deck.gl/) for space-time trajectory analysis. Upload CSV data, run analysis tools in the browser or on an optional server, and visualize results on an interactive map.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "./dev.sh",
+    "dev:frontend": "npm --prefix app/front-end run dev",
+    "dev:backend": "cd app/back-end && uv run flask --app app run -p 8000 --reload",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WYZDevin/time-geography-kepler.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/WYZDevin/time-geography-kepler/issues"
+  },
+  "homepage": "https://github.com/WYZDevin/time-geography-kepler#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.0",
+    "vitepress": "^1.6.3"
+  }
+}

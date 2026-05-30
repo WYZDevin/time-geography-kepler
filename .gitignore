@@ -12,11 +12,16 @@ dist
 dist-ssr
 *.local
 
+# VitePress docs build artifacts
+docs/.vitepress/dist
+docs/.vitepress/cache
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
+.uv-cache/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
@@ -38,3 +43,10 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
