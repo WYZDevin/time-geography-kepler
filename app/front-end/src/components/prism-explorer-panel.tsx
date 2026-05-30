@@ -27,7 +27,7 @@ import { backendApiService } from '@/services/backend-api-service';
 import { normalizeBackendResponse } from '@/services/backend-normalizer';
 import type { FeatureCollection } from '@/interfaces/data-interfaces';
 import type { MapDataset, DeckLayerDescriptor, SelectedAnchor } from '@/interfaces/map-types';
-import { X, ArrowLeftRight, RotateCcw, Crosshair } from 'lucide-react';
+import { X, ArrowLeftRight, RotateCcw, Crosshair, ChevronUp, ChevronDown } from 'lucide-react';
 
 const SPEED_PRESETS: Record<string, string> = {
   walking: 'Walking (5 km/h)',
@@ -50,6 +50,7 @@ export const PrismExplorerPanel: React.FC = () => {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const computeIdRef = useRef(0);
   const [computeError, setComputeError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   // -----------------------------------------------------------------------
   // Compute prism & push results to map store
@@ -86,6 +87,11 @@ export const PrismExplorerPanel: React.FC = () => {
 
       outputs.forEach((output, index) => {
         const dsType = (output.features[0]?.properties?._dataset_type as string) || '';
+        // The PPA origin-points layer was a one-marker-per-GPS-sample stack
+        // that obscured the reachable roads it was meant to anchor. The
+        // backend still emits it (other consumers + tests read the dwell-
+        // time summary off it), but we skip rendering it on the map.
+        if (dsType === 'ppa-origin-points') return;
         const datasetId = `prism-explorer-${dsType || index}-${id}`;
         const datasetLabel = dsType || `Prism Result ${index + 1}`;
 
@@ -119,6 +125,24 @@ export const PrismExplorerPanel: React.FC = () => {
         }
 
         newLayers.push(descriptor);
+
+        // Mirror the PPA reachable-roads output as a ground-projected sibling
+        // (same geometry, z forced to 0) so the user can read road coverage
+        // on the basemap alongside the stacked 3D layer.
+        if (dsType === 'ppa-road-network') {
+          const groundDsType = 'ppa-road-network-ground';
+          const groundDatasetId = `prism-explorer-${groundDsType}-${id}`;
+          const groundLabel = groundDsType;
+          newDatasets.push({
+            id: groundDatasetId,
+            label: groundLabel,
+            data: cleanedOutput,
+            fieldSummary,
+          });
+          newLayers.push(
+            buildDescriptorForDataset(groundDsType, null, groundDatasetId, groundLabel, cleanedOutput),
+          );
+        }
       });
 
       dispatch(addDatasets(newDatasets));
@@ -159,6 +183,16 @@ export const PrismExplorerPanel: React.FC = () => {
       }
     }
   }, [anchorA, anchorB, params, dispatch, ownedDatasetIds, ownedLayerIds, mapDatasets]);
+
+  // PASTA mode is currently disabled — coerce any persisted Redux state
+  // (e.g. a user who last opened the panel on the PASTA branch) back to
+  // the PPA Road Network mode so the panel never lands on the disabled
+  // PASTA codepath. Remove the coercion when PASTA is re-enabled.
+  useEffect(() => {
+    if (params.prismMode === 'pasta') {
+      dispatch(updateParams({ prismMode: 'road-network-stp' }));
+    }
+  }, [params.prismMode, dispatch]);
 
   // -----------------------------------------------------------------------
   // Auto-compute on anchor selection or param change (debounced)
@@ -207,11 +241,27 @@ export const PrismExplorerPanel: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
         <span className="text-sm font-bold tracking-wide">Space-Time Prism Explorer</span>
-        <button onClick={handleClose} className="p-1 hover:bg-white/20 rounded cursor-pointer">
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="p-1 hover:bg-white/20 rounded cursor-pointer"
+            title={collapsed ? 'Show panel' : 'Hide panel'}
+            aria-label={collapsed ? 'Show panel' : 'Hide panel'}
+          >
+            {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={handleClose}
+            className="p-1 hover:bg-white/20 rounded cursor-pointer"
+            title="Close explorer"
+            aria-label="Close explorer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
+      {!collapsed && (
       <div className="p-4 space-y-4">
         {/* Anchor status */}
         <div className="space-y-2">
@@ -275,16 +325,19 @@ export const PrismExplorerPanel: React.FC = () => {
               Parameters
             </div>
 
-            {/* Prism mode */}
+            {/* Prism mode — locked to PPA Road Network while PASTA is
+                disabled. Re-enable the dropdown (drop `disabled` and the
+                PASTA `<option disabled>` flag) when PASTA comes back. */}
             <label className="block">
               <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Prism Mode</span>
               <select
                 value={params.prismMode}
                 onChange={e => dispatch(updateParams({ prismMode: e.target.value }))}
-                className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
+                disabled
+                className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="road-network-stp">PPA Road Network (per-GPS-point)</option>
-                <option value="pasta">PASTA – H3 Potential Path Area</option>
+                <option value="pasta" disabled>PASTA – H3 Potential Path Area (disabled)</option>
               </select>
             </label>
 
@@ -319,6 +372,7 @@ export const PrismExplorerPanel: React.FC = () => {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };
@@ -561,22 +615,6 @@ function PPARoadNetworkParams({
         </span>
       </label>
 
-      {/* Max origins cap */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          Max GPS Origins: {params.maxOrigins}
-        </span>
-        <input
-          type="range" min={5} max={120} step={1}
-          value={params.maxOrigins}
-          onChange={e => dispatch(updateParams({ maxOrigins: Number(e.target.value) }))}
-          className="w-full accent-blue-600"
-        />
-        <span className="text-xs text-gray-400 mt-0.5 block">
-          Fewer = faster · More = denser stack between anchors
-        </span>
-      </label>
-
       {/* Road network dataset */}
       <label className="block">
         <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
@@ -599,6 +637,69 @@ function PPARoadNetworkParams({
           Pick a loaded road LineString dataset, or leave empty
         </span>
       </label>
+
+      {/* Performance & rendering — collapsed by default so the main panel
+          stays focused on the PPA-semantic controls. The knobs here only
+          affect how many origins and segments get rendered, not the PPA
+          computation itself. */}
+      <details className="group border border-gray-200 dark:border-gray-700 rounded-md">
+        <summary className="cursor-pointer select-none text-xs font-medium text-gray-700 dark:text-gray-200 px-2 py-1.5 list-none flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-md">
+          <span>Performance &amp; Rendering</span>
+          <span className="text-gray-400 group-open:rotate-90 transition-transform">›</span>
+        </summary>
+
+        <div className="px-2 py-2 space-y-3 border-t border-gray-200 dark:border-gray-700">
+          {/* Max origins cap */}
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Max GPS Origins: {params.maxOrigins}
+            </span>
+            <input
+              type="range" min={5} max={120} step={1}
+              value={params.maxOrigins}
+              onChange={e => dispatch(updateParams({ maxOrigins: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+            <span className="text-xs text-gray-400 mt-0.5 block">
+              Fewer = faster · More = denser stack between anchors
+            </span>
+          </label>
+
+          {/* Static cluster merge radius */}
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Merge Static Origins: {params.clusterRadiusMeters} m
+            </span>
+            <input
+              type="range" min={0} max={500} step={5}
+              value={params.clusterRadiusMeters}
+              onChange={e => dispatch(updateParams({ clusterRadiusMeters: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+            <span className="text-xs text-gray-400 mt-0.5 block">
+              Consecutive GPS points within this radius collapse into one PPA at the
+              cluster centre · 0 disables merging
+            </span>
+          </label>
+
+          {/* Per-origin render-segment cap */}
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Segments per PPA: {params.maxSegmentsPerOrigin || 'unlimited'}
+            </span>
+            <input
+              type="range" min={0} max={2000} step={50}
+              value={params.maxSegmentsPerOrigin}
+              onChange={e => dispatch(updateParams({ maxSegmentsPerOrigin: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+            <span className="text-xs text-gray-400 mt-0.5 block">
+              Trims the lowest-dwell fringe roads per PPA to keep the 3D layer
+              responsive · 0 = unlimited (may lag on dense GPS)
+            </span>
+          </label>
+        </div>
+      </details>
     </>
   );
 }
@@ -612,6 +713,8 @@ async function computeRoadNetworkSTP(
     roadNetworkDatasetId: string;
     minActivityMinutes: number;
     maxOrigins: number;
+    clusterRadiusMeters: number;
+    maxSegmentsPerOrigin: number;
   },
   mapDatasets: Record<string, MapDataset>,
   ownedDatasetIds: string[],
@@ -637,6 +740,8 @@ async function computeRoadNetworkSTP(
     // the trajectory are always reachable.
     minActivityMinutes: params.minActivityMinutes,
     maxOrigins: params.maxOrigins,
+    clusterRadiusMeters: params.clusterRadiusMeters,
+    maxSegmentsPerOrigin: params.maxSegmentsPerOrigin,
   };
   if (params.roadNetworkDatasetId && mapDatasets[params.roadNetworkDatasetId]) {
     options.roadNetworkData = mapDatasets[params.roadNetworkDatasetId].data;

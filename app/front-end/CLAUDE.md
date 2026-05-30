@@ -1,10 +1,10 @@
-# AI Coding Instructions: Front-End (React + Kepler.gl)
+# AI Coding Instructions: Front-End (React + deck.gl)
 
-**Stack:** React 18, TypeScript, Vite, Redux Toolkit, Kepler.gl, Turf.js, Tailwind CSS
+**Stack:** React 18, TypeScript, Vite, Redux Toolkit, deck.gl 9, react-map-gl 7, maplibre-gl 4, Turf.js, Tailwind CSS
 
-This app is a geospatial analysis platform built on top of Kepler.gl. It provides analysis **tools** (STKDE, Time Geography, Space-Time Cube, Buffer, Union, Intersection) that can run either **in the browser** or on a **Flask backend**, depending on each tool's execution policy.
+This app is a geospatial analysis platform built on top of deck.gl + react-map-gl + maplibre-gl. It provides analysis **tools** (STKDE, Time Geography, Space-Time Cube, Space-Time Prism, Buffer, Union, Intersection) that can run either **in the browser** or on a **Flask backend**, depending on each tool's execution policy.
 
-When adding/removing/editing Kepler.gl layers, datasets, or map state, check: https://docs.kepler.gl/docs/api-reference
+When adding/removing/editing deck.gl layers, datasets, or map state, check: https://deck.gl/docs/api-reference
 
 ---
 
@@ -40,7 +40,7 @@ Environment: `.env` must contain `VITE_BACKEND_URL` (default `http://localhost:8
 | `src/services/analysis-engine.ts` | **Entry point for all tool runs.** Routes to frontend (`tool.analyze()`) or backend (`backendApiService.executeTool()`) based on `request.mode`. Returns `AnalysisResult`. |
 | `src/services/backend-api-service.ts` | HTTP client for the Flask backend. Three endpoints: `GET /health`, `GET /tools`, `POST /tools/{id}/execute`. Never throws — returns `null`/error objects. |
 | `src/services/execution-resolver.ts` | Determines what modes are available for a tool by combining the frontend registry + backend tool list + backend health. Exports `resolveToolCapabilities()` (pure) and `useResolvedCapabilities()` (React hook). |
-| `src/services/backend-normalizer.ts` | Converts backend responses to frontend format: remaps field names (`_processed_height` -> `_height`), injects Kepler.gl layer configs. Tool-specific normalizers for time-geography, STKDE, space-time-cube, and a generic path for buffer/union/intersection. |
+| `src/services/backend-normalizer.ts` | Converts backend responses to frontend format: remaps field names (`_processed_height` -> `_height`), injects deck.gl layer configs. Tool-specific normalizers for time-geography, STKDE, space-time-cube, space-time-prism, and a generic path for buffer/union/intersection. |
 
 ### Tools
 
@@ -65,7 +65,13 @@ Environment: `.env` must contain `VITE_BACKEND_URL` (default `http://localhost:8
 | `src/hooks/` | Custom hooks — `use-backend-init.ts` (backend health polling), `use-keyboard-shortcuts.ts` |
 | `src/data-processors/` | Data transformation logic (e.g. `stkde.tsx` for STKDE output processing) |
 | `src/lib/` | Shared utilities (`utils.ts` — cn() helper, etc.) |
-| `src/visualization-templates/` | Kepler.gl layer config JSON templates per tool (time-geography, buffer-zones, etc.) |
+| `src/components/deck-map-view.tsx` | Main map component wrapping deck.gl + react-map-gl |
+| `src/components/map-legend.tsx` | Map legend overlay component |
+| `src/components/map-controls.tsx` | Map control widgets (zoom, pitch, bearing) |
+| `src/services/layer-factory.ts` | Creates deck.gl layer instances from analysis results |
+| `src/stores/map-slice.ts` | Redux slice for map view state (viewport, layers, base map) |
+| `src/interfaces/map-types.ts` | TypeScript types for map state, layer configs, view state |
+| `src/visualization-templates/` | deck.gl layer config templates per tool (time-geography, buffer-zones, etc.) |
 
 ---
 
@@ -144,8 +150,8 @@ The backend client already exists in `backend-api-service.ts`. It targets the Fl
 The backend returns raw GeoJSON with its own field names. The normalizer (`backend-normalizer.ts`) handles:
 
 - **Field remapping:** `_processed_height` -> `_height`, `_processed_time` -> `_time_order`, `_processed_neighbors` -> `_neighbors`
-- **Layer config injection:** Backend doesn't embed Kepler.gl configs; the normalizer creates them per tool
-- **Tool-specific logic:** Separate normalizers for `time-geography`, `stkde`, `space-time-cube`; generic handler for `buffer`/`union`/`intersection`
+- **Layer config injection:** Backend doesn't embed deck.gl configs; the normalizer creates them per tool via `layer-factory.ts`
+- **Tool-specific logic:** Separate normalizers for `time-geography`, `stkde`, `space-time-cube`, `space-time-prism`; generic handler for `buffer`/`union`/`intersection`
 
 **When adding a new tool that supports backend:** add a case in `normalizeFeatureCollection()` if it needs field remapping or special layer configs. Generic tools can fall through to `normalizeGeneric()`.
 
@@ -240,7 +246,7 @@ Backend state lives in `settings-slice.ts`:
 
 - Results rendering is **mode-agnostic**: same visualization logic for frontend and backend results
 - Never branch visualization behavior on execution mode
-- Layer configs come from either the tool itself (frontend) or the normalizer (backend) — Kepler.gl receives the same format either way
+- Layer configs come from either the tool itself (frontend) or the normalizer (backend) — deck.gl receives the same format either way
 - Do not hardcode colors in tool logic; use constants from `src/utils/constants.ts`
 
 ---

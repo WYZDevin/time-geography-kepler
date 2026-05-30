@@ -58,15 +58,15 @@ export const exportLayerConfig = (
 /**
  * Export map as image (requires canvas element)
  * Note: This is a simplified version. Full implementation would require
- * capturing the Kepler.gl canvas directly, which may require additional
- * Kepler.gl API calls
+ * capturing the map canvas directly, which may require additional
+ * deck.gl API calls
  */
 export const exportMapAsImage = async (
   canvasElement?: HTMLCanvasElement,
   filename?: string,
   format: 'png' | 'jpeg' = 'png'
 ): Promise<void> => {
-  // Try to find Kepler.gl canvas if not provided
+  // Try to find map canvas if not provided
   const canvas = canvasElement || document.querySelector('canvas.mapboxgl-canvas') as HTMLCanvasElement;
 
   if (!canvas) {

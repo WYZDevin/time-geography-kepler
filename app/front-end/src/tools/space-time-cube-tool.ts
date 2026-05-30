@@ -45,6 +45,36 @@ export class SpaceTimeCubeTool implements SimpleTool {
           { label: 'Every 24 Hours', value: '24h' },
         ],
       },
+      {
+        key: 'userIdField',
+        type: 'field',
+        label: 'Trajectory ID Column',
+        description: 'Optional. Column identifying each trajectory/user. Required to enable "Align Start Times".',
+        defaultValue: '',
+      },
+      {
+        key: 'alignUserTime',
+        type: 'boolean',
+        label: 'Align Start Times (Normalize Time)',
+        description: 'When a Trajectory ID column is set and multiple trajectories exist, measure each point as time elapsed from that trajectory\'s own first observation, so trajectories tracked over different date ranges overlay on a shared elapsed-time (Day 1…Day n) Z-axis.',
+        defaultValue: false,
+      },
+      {
+        key: 'envDataset',
+        type: 'dataset',
+        label: 'Environment Dataset',
+        description: 'Optional: gridded environmental data (e.g. noise, PM2.5). Each feature must have an hourly timestamp and an indicator column.',
+        required: false,
+        defaultValue: null,
+      },
+      {
+        key: 'envField',
+        type: 'field',
+        label: 'Environmental Indicator',
+        description: 'Column in the environment dataset to use as the exposure value (e.g. noise_db)',
+        sourceDatasetOptionKey: 'envDataset',
+        defaultValue: '',
+      },
     ];
   }
 

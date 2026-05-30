@@ -1,6 +1,6 @@
 /**
  * Enhanced Visualization Service
- * Manages layer creation, templates, and color schemes for Kepler.gl
+ * Manages layer creation, templates, and color schemes for deck.gl
  */
 
 import { FeatureCollection } from '@/interfaces/data-interfaces';
@@ -44,7 +44,7 @@ const TEMPLATE_MAP: Record<string, any> = {
 
 export class EnhancedVisualizationService {
   /**
-   * Creates Kepler.gl layer configuration from tool output
+   * Creates layer configuration from tool output
    */
   createLayersFromToolOutput(
     toolId: string,

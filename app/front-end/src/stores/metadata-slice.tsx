@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: MIT
-// Copyright contributors to the kepler.gl project
-
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { FeatureCollection } from '../interfaces/data-interfaces';
-import { Field } from '@kepler.gl/types';
+
+interface Field {
+  name: string;
+  type: string;
+}
 
 // Define the shape of our metadata state
 interface MetadataState {

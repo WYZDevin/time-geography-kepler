@@ -1,22 +1,12 @@
 import { toolRegistry } from '../utils/tool-registry';
 import { TimeGeographyTool } from './time-geography-tool';
-import { BufferTool } from './buffer-tool';
-import { IntersectionTool } from './intersection-tool';
-import { UnionTool } from './union-tool';
 import { STKDETool } from './stkde-tool';
 import { SpaceTimeCubeTool } from './space-time-cube-tool';
 
-// Import all SimpleTool implementations
 const availableTools = [
-    // Space-Time Analysis Tools
     new TimeGeographyTool(),
     new STKDETool(),
     new SpaceTimeCubeTool(),
-
-    // Spatial Analysis Tools
-    new BufferTool(),
-    new IntersectionTool(),
-    new UnionTool(),
 ];
 
 /**

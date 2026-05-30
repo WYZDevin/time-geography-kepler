@@ -47,6 +47,20 @@ export class TimeGeographyTool implements SimpleTool {
         defaultValue: true
       },
       {
+        key: 'userIdField',
+        label: 'User ID Column',
+        description: 'Split the trajectory by this column — each user is drawn as its own distinctly-colored path',
+        type: 'field',
+        defaultValue: ''
+      },
+      {
+        key: 'alignUserTime',
+        label: 'Align User Start Times',
+        description: 'When a User ID column is set and multiple users exist, start every user at the same ground level so the Z-axis shows elapsed time (Day 1…Day n) instead of absolute time. Useful when users were tracked over different date ranges.',
+        type: 'boolean',
+        defaultValue: false
+      },
+      {
         key: 'timeBreaks',
         label: 'Z-Axis Time Labels Interval',
         type: 'select',
@@ -58,6 +72,12 @@ export class TimeGeographyTool implements SimpleTool {
           { label: 'Every 12 Hours', value: '12h' },
           { label: 'Every 24 Hours', value: '24h' }
         ]
+      },
+      {
+        key: 'stayField',
+        label: 'Stay Location Field',
+        type: 'field',
+        defaultValue: ''
       },
       {
         key: 'timeWindow',
@@ -88,6 +108,8 @@ export class TimeGeographyTool implements SimpleTool {
       const timeField = attributes?.time || this.attributeMapping.time;
       const latField = 'latitude';
       const lngField = 'longitude';
+      const userIdField = (options.userIdField as string || '').trim();
+      const alignUserTime = options.alignUserTime === true;
 
       if (!timeField) {
         console.error('Time field mapping is required for trajectory visualization');
@@ -96,7 +118,7 @@ export class TimeGeographyTool implements SimpleTool {
 
       progress.report(30, 'Sorting and projecting trajectory to 3D...');
 
-      const preprocessedData = this._preprocessData(data, timeField, latField, lngField);
+      const preprocessedData = this._preprocessData(data, timeField, latField, lngField, userIdField, alignUserTime);
 
       if (preprocessedData.features.length === 0) {
         console.error('No valid trajectory points found');
@@ -128,7 +150,9 @@ export class TimeGeographyTool implements SimpleTool {
     data: FeatureCollection,
     timeField: string,
     latField: string,
-    lngField: string
+    lngField: string,
+    userIdField?: string,
+    alignUserTime?: boolean
   ): FeatureCollection {
     const validFeatures = data.features
       .map((feature, index) => {
@@ -138,10 +162,14 @@ export class TimeGeographyTool implements SimpleTool {
         const [lng, lat] = coords;
         const timeValue = getProperty(feature, timeField);
 
-        if (!timeValue) return null;
+        if (timeValue == null || timeValue === '') return null;
 
-        const timestamp = new Date(timeValue).getTime();
+        const timestamp = parseTimestamp(timeValue);
         if (isNaN(timestamp)) return null;
+
+        const userId = userIdField
+          ? String(getProperty(feature, userIdField) ?? 'unknown')
+          : undefined;
 
         return {
           ...feature,
@@ -149,6 +177,7 @@ export class TimeGeographyTool implements SimpleTool {
             ...feature.properties,
             _timestamp: timestamp,
             _original_index: index,
+            _user_id: userId,
             [latField]: lat,
             [lngField]: lng
           }
@@ -156,15 +185,54 @@ export class TimeGeographyTool implements SimpleTool {
       })
       .filter(Boolean) as GeoJSONFeature[];
 
-    validFeatures.sort((a, b) =>
-      a!.properties!._timestamp - b!.properties!._timestamp
-    );
+    // Sort so each user's points are contiguous and time-ordered. Without a
+    // user column this is a plain chronological sort (single trajectory).
+    validFeatures.sort((a, b) => {
+      if (userIdField) {
+        const ua = a!.properties!._user_id as string;
+        const ub = b!.properties!._user_id as string;
+        if (ua !== ub) return ua < ub ? -1 : 1;
+      }
+      return a!.properties!._timestamp - b!.properties!._timestamp;
+    });
 
+    // Time axis is shared across all users so trajectories are comparable.
     const timeExtent = [
       Math.min(...validFeatures.map(f => f.properties!._timestamp)),
       Math.max(...validFeatures.map(f => f.properties!._timestamp))
     ];
     const timeRange = timeExtent[1] - timeExtent[0];
+
+    // Assign each distinct user a stable index (and therefore a distinct color),
+    // in order of first appearance.
+    const userIndex = new Map<string, number>();
+    if (userIdField) {
+      for (const f of validFeatures) {
+        const uid = f.properties!._user_id as string;
+        if (!userIndex.has(uid)) userIndex.set(uid, userIndex.size);
+      }
+    }
+
+    // Per-user time alignment: when enabled and there is more than one user,
+    // measure each point's elapsed time from its own user's first observation
+    // so every user starts at ground level (z=0). The Z-axis then represents
+    // elapsed time shared across users rather than absolute dates.
+    const align = !!userIdField && alignUserTime === true && userIndex.size > 1;
+    const userStart = new Map<string, number>();
+    let maxElapsed = 0;
+    if (align) {
+      for (const f of validFeatures) {
+        const uid = f.properties!._user_id as string;
+        const t = f.properties!._timestamp as number;
+        const cur = userStart.get(uid);
+        if (cur === undefined || t < cur) userStart.set(uid, t);
+      }
+      for (const f of validFeatures) {
+        const uid = f.properties!._user_id as string;
+        const e = (f.properties!._timestamp as number) - (userStart.get(uid) as number);
+        if (e > maxElapsed) maxElapsed = e;
+      }
+    }
 
     const bounds = ToolUtils.getBounds(validFeatures);
     let TOTAL_HEIGHT_METERS = 1000;
@@ -173,17 +241,36 @@ export class TimeGeographyTool implements SimpleTool {
     }
 
     const processedFeatures = validFeatures.map((feature, index) => {
-      const timeProgress = timeRange > 0
-        ? (feature.properties!._timestamp - timeExtent[0]) / timeRange
-        : 0;
+      let timeProgress: number;
+      let elapsedMs: number | undefined;
+      if (align) {
+        const uid = feature.properties!._user_id as string;
+        elapsedMs = (feature.properties!._timestamp as number) - (userStart.get(uid) as number);
+        timeProgress = maxElapsed > 0 ? elapsedMs / maxElapsed : 0;
+      } else {
+        timeProgress = timeRange > 0
+          ? (feature.properties!._timestamp - timeExtent[0]) / timeRange
+          : 0;
+      }
       const scaledHeight = timeProgress * TOTAL_HEIGHT_METERS;
 
       const geom = feature.geometry as any;
       const [lng, lat] = geom.coordinates;
 
+      // Neighbors connect only points belonging to the same user, so distinct
+      // users never get linked into one path.
+      const uid = feature.properties!._user_id;
       const neighbors: number[] = [];
-      if (index > 0) neighbors.push(index - 1);
-      if (index < validFeatures.length - 1) neighbors.push(index + 1);
+      if (index > 0 && validFeatures[index - 1].properties!._user_id === uid) {
+        neighbors.push(index - 1);
+      }
+      if (index < validFeatures.length - 1 && validFeatures[index + 1].properties!._user_id === uid) {
+        neighbors.push(index + 1);
+      }
+
+      const colorRgba = userIdField
+        ? [...colorForUserIndex(userIndex.get(uid as string) ?? 0), 220]
+        : undefined;
 
       return {
         ...feature,
@@ -196,6 +283,8 @@ export class TimeGeographyTool implements SimpleTool {
           [PROCESSED_TIME_FIELD]: timeProgress,
           [PROCESSED_HEIGHT_FIELD]: scaledHeight,
           [PROCESSED_NEIGHBORS_FIELD]: neighbors,
+          ...(colorRgba ? { color_rgba: colorRgba } : {}),
+          ...(elapsedMs !== undefined ? { _elapsed_ms: elapsedMs } : {}),
           _time_progress: timeProgress,
           _sequence: index
         }
@@ -237,13 +326,17 @@ export class TimeGeographyTool implements SimpleTool {
 
     // 2. Stay points if enabled
     if (options.visualizeStay) {
-      const timeWindowHours = (options.timeWindow as number) || 24;
-      const stayPoints = this._detectAndCreateStayPoints(
-        preprocessedData.features,
-        timeWindowHours,
-        latField,
-        lngField
-      );
+      const stayField = (options.stayField as string || '').trim();
+      let stayPoints: FeatureCollection;
+
+      if (stayField) {
+        // Attribute-based: consecutive rows with the same field value = one stay
+        stayPoints = this._detectStaysByField(preprocessedData.features, stayField, latField, lngField);
+      } else {
+        // Fallback: spatial proximity-based detection
+        const timeWindowHours = (options.timeWindow as number) || 24;
+        stayPoints = this._detectAndCreateStayPoints(preprocessedData.features, timeWindowHours, latField, lngField);
+      }
 
       if (stayPoints.features.length > 0) {
         const stayPointsData: FeatureCollection = {
@@ -286,25 +379,37 @@ export class TimeGeographyTool implements SimpleTool {
       let minNearbyTime = currentTime;
       let maxNearbyTime = currentTime;
 
-      for (let i = Math.max(0, currentIndex - 10); i < Math.min(features.length, currentIndex + 10); i++) {
-        if (i === currentIndex) continue;
+      // Scan backward while within time threshold (data is sorted by time)
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        const otherTime = features[i].properties!._timestamp;
+        if (currentTime - otherTime > timeThreshold) break;
 
-        const otherFeature = features[i];
-        const otherLat = otherFeature.properties![latField];
-        const otherLng = otherFeature.properties![lngField];
-        const otherTime = otherFeature.properties!._timestamp;
-
-        if (Math.abs(currentTime - otherTime) > timeThreshold) continue;
-
-        const distance = this._calculateDistance(currentLat, currentLng, otherLat, otherLng);
+        const distance = this._calculateDistance(
+          currentLat, currentLng,
+          features[i].properties![latField], features[i].properties![lngField]
+        );
         if (distance < distanceThreshold) {
           nearbyCount++;
           minNearbyTime = Math.min(minNearbyTime, otherTime);
+        }
+      }
+
+      // Scan forward while within time threshold
+      for (let i = currentIndex + 1; i < features.length; i++) {
+        const otherTime = features[i].properties!._timestamp;
+        if (otherTime - currentTime > timeThreshold) break;
+
+        const distance = this._calculateDistance(
+          currentLat, currentLng,
+          features[i].properties![latField], features[i].properties![lngField]
+        );
+        if (distance < distanceThreshold) {
+          nearbyCount++;
           maxNearbyTime = Math.max(maxNearbyTime, otherTime);
         }
       }
 
-      if (nearbyCount >= 3) {
+      if (nearbyCount >= 1) {
         const stayDuration = (maxNearbyTime - minNearbyTime) / 1000;
         stayPoints.push({
           ...currentFeature,
@@ -323,6 +428,84 @@ export class TimeGeographyTool implements SimpleTool {
       type: 'FeatureCollection',
       features: stayPoints
     };
+  }
+
+  /**
+   * Detect stays by grouping consecutive rows with the same field value.
+   * Each run of identical values produces one stay point at the centroid.
+   */
+  private _detectStaysByField(
+    features: GeoJSONFeature[],
+    stayField: string,
+    latField: string,
+    lngField: string
+  ): FeatureCollection {
+    const stayPoints: GeoJSONFeature[] = [];
+    if (features.length === 0) return { type: 'FeatureCollection', features: stayPoints };
+
+    let groupStart = 0;
+
+    for (let i = 1; i <= features.length; i++) {
+      const prev = features[i - 1].properties![stayField];
+      const curr = i < features.length ? features[i].properties![stayField] : undefined;
+
+      // End of a consecutive group
+      if (i === features.length || String(curr) !== String(prev)) {
+        const group = features.slice(groupStart, i);
+
+        // Compute centroid position
+        let sumLat = 0;
+        let sumLng = 0;
+        let sumHeight = 0;
+        let minTime = Infinity;
+        let maxTime = -Infinity;
+
+        for (const f of group) {
+          sumLat += f.properties![latField] as number;
+          sumLng += f.properties![lngField] as number;
+          sumHeight += (f.properties![PROCESSED_HEIGHT_FIELD] as number) ?? 0;
+          const t = f.properties!._timestamp as number;
+          if (t < minTime) minTime = t;
+          if (t > maxTime) maxTime = t;
+        }
+
+        const n = group.length;
+        const centroidLat = sumLat / n;
+        const centroidLng = sumLng / n;
+        const centroidHeight = sumHeight / n;
+        const stayDuration = (maxTime - minTime) / 1000; // seconds
+        const midTimeProgress = ((group[0].properties![PROCESSED_TIME_FIELD] as number) +
+          (group[n - 1].properties![PROCESSED_TIME_FIELD] as number)) / 2;
+
+        const label = String(prev ?? 'unknown');
+
+        stayPoints.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [centroidLng, centroidLat, centroidHeight],
+          },
+          properties: {
+            ...group[0].properties,
+            [latField]: centroidLat,
+            [lngField]: centroidLng,
+            [PROCESSED_HEIGHT_FIELD]: centroidHeight,
+            [PROCESSED_TIME_FIELD]: midTimeProgress,
+            _timestamp: (minTime + maxTime) / 2,
+            _is_stay_point: true,
+            _stay_duration: stayDuration,
+            _stay_id: stayPoints.length,
+            _stay_label: label,
+            _stay_point_count: n,
+            _stay_cluster: stayPoints.length,
+          },
+        });
+
+        groupStart = i;
+      }
+    }
+
+    return { type: 'FeatureCollection', features: stayPoints };
   }
 
   /**
@@ -409,4 +592,59 @@ export class TimeGeographyTool implements SimpleTool {
       }
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-user color assignment — distinct hues via the golden-angle sequence so
+// adjacent user indices stay visually well-separated.
+// ---------------------------------------------------------------------------
+
+function colorForUserIndex(index: number): [number, number, number] {
+  const hue = (index * 137.508) % 360;
+  return hslToRgb(hue, 0.65, 0.5);
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255)
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Robust timestamp parser — handles ISO strings, Unix seconds, and Unix ms
+// ---------------------------------------------------------------------------
+
+function parseTimestamp(value: unknown): number {
+  if (typeof value === 'number') {
+    // Distinguish Unix seconds from milliseconds:
+    // Unix ms timestamps are >= 1e12 (Sep 2001+); anything smaller is likely seconds.
+    if (value > 0 && value < 1e12) {
+      return value * 1000; // seconds → ms
+    }
+    return value; // already milliseconds (or negative/zero edge case)
+  }
+
+  if (typeof value === 'string') {
+    // Try as number first (CSV sometimes stores numbers as strings)
+    const num = Number(value);
+    if (!isNaN(num) && value.trim() !== '') {
+      return parseTimestamp(num);
+    }
+    // Fall through to Date constructor for ISO / human-readable strings
+    return new Date(value).getTime();
+  }
+
+  return NaN;
 }

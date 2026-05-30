@@ -3,7 +3,7 @@
  *
  * Two jobs:
  * A) Field remapping per tool (backend uses different property names)
- * B) Layer config injection (backend doesn't embed Kepler.gl layer configs)
+ * B) Layer config injection (backend doesn't embed layer configs)
  */
 import { AnalysisResult } from './analysis-engine';
 import { FeatureCollection, GeoJSONFeature } from '@/interfaces/data-interfaces';
@@ -56,8 +56,12 @@ function normalizeFeatureCollection(
       return normalizeStkde(fc, outputIndex);
     case 'space-time-cube':
       return normalizeSpaceTimeCube(fc, outputIndex);
+    case 'space-time-prism':
+      return normalizeSpaceTimePrism(fc, outputIndex);
+    case 'pasta':
+      return normalizePasta(fc, outputIndex);
     default:
-      return normalizeGeneric(fc, toolId);
+      throw new Error(`No normalizer for tool: ${toolId}`);
   }
 }
 
@@ -83,12 +87,22 @@ function normalizeTimeGeography(fc: any, outputIndex: number): FeatureCollection
       props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
       delete props[BACKEND_HEIGHT_FIELD];
     }
+    if (props._time_progress != null && props[PROCESSED_TIME_FIELD] == null) {
+      props[PROCESSED_TIME_FIELD] = props._time_progress;
+    }
     if (BACKEND_NEIGHBORS_FIELD in props) {
       props[PROCESSED_NEIGHBORS_FIELD] = props[BACKEND_NEIGHBORS_FIELD];
       delete props[BACKEND_NEIGHBORS_FIELD];
     }
 
-    // Remap dataset type
+    // Ensure _timestamp is a number (backend may send it as-is)
+    if (props._timestamp != null && typeof props._timestamp !== 'number') {
+      const parsed = Number(props._timestamp);
+      if (!isNaN(parsed)) props._timestamp = parsed;
+    }
+
+    // Remap dataset type — backend sends "stay-point" (singular),
+    // deck-adapter expects "stay-points" (plural)
     if (isStayPoints) {
       props._dataset_type = 'stay-points';
       props._layer_config = createStayPointsLayerConfig();
@@ -117,6 +131,13 @@ function normalizeStkde(fc: any, outputIndex: number): FeatureCollection {
   const level = STKDE_CONFIDENCE_LEVELS[outputIndex] ?? STKDE_CONFIDENCE_LEVELS[0];
   const dataId = `stkde-density-${outputIndex + 1}`;
 
+  // Derive max time_slice_index to compute _time_order (0..1)
+  let maxSliceIndex = 0;
+  for (const f of fc.features) {
+    const idx = f.properties?.time_slice_index;
+    if (typeof idx === 'number' && idx > maxSliceIndex) maxSliceIndex = idx;
+  }
+
   const features: GeoJSONFeature[] = fc.features.map((f: any) => {
     const props = { ...f.properties };
 
@@ -126,16 +147,28 @@ function normalizeStkde(fc: any, outputIndex: number): FeatureCollection {
       delete props[BACKEND_HEIGHT_FIELD];
     }
 
+    // Compute normalized time order from time_slice_index
+    const sliceIdx = props.time_slice_index;
+    if (typeof sliceIdx === 'number') {
+      props[PROCESSED_TIME_FIELD] = maxSliceIndex > 0 ? sliceIdx / maxSliceIndex : 0;
+    }
+
+    // Ensure _timestamp is a number (from time_value ISO string)
+    if (props._timestamp == null && props.time_value) {
+      const parsed = new Date(props.time_value).getTime();
+      if (isFinite(parsed)) props._timestamp = parsed;
+    }
+
     // Set dataset type to per-level id (matching frontend stkde-tool.ts enrichment)
     props._dataset_type = dataId;
     props._confidence = level.confidence;
 
-    // Inject _geojson string for kepler columnMode: 'geojson'
+    // Inject _geojson string for layer data
     if (!props._geojson && f.geometry) {
       props._geojson = JSON.stringify(f.geometry);
     }
 
-    // Inject Kepler layer config object (backend doesn't embed these)
+    // Inject layer config object (backend doesn't embed these)
     props._layer_config = createStkdeLayerConfig(dataId, level.confidence, level.color, level.opacity);
 
     return { type: 'Feature' as const, geometry: f.geometry, properties: props };
@@ -149,34 +182,34 @@ function normalizeStkde(fc: any, outputIndex: number): FeatureCollection {
 // ---------------------------------------------------------------------------
 
 function normalizeSpaceTimeCube(fc: any, outputIndex: number): FeatureCollection {
+  // Output 0 = STC cube polygons; Output 1 = trajectory exposure line segments
+  if (outputIndex === 1) return _normalizeStcTrajectory(fc);
+
   const dataId = `space-time-cube-${outputIndex}`;
+
+  // Detect whether env data is present so we can choose the right color field
+  const hasEnv = fc.features.some(
+    (f: any) => f.properties?.env_value != null
+  );
 
   const features: GeoJSONFeature[] = fc.features.map((f: any) => {
     const props = { ...f.properties };
 
-    // Remap _processed_height → _height (extrusion height for Kepler 3D)
     if (BACKEND_HEIGHT_FIELD in props) {
       props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
       delete props[BACKEND_HEIGHT_FIELD];
     }
 
-    // Remap _processed_time → _time_order
     if (BACKEND_TIME_FIELD in props) {
       props[PROCESSED_TIME_FIELD] = props[BACKEND_TIME_FIELD];
       delete props[BACKEND_TIME_FIELD];
     }
 
-    // Propagate _timestamp (epoch ms) for axes-utils Z-axis time labels.
-    // Backend may send it as `time_value` (ISO string) or `_timestamp` (number).
     if (props._timestamp == null && props.time_value != null) {
       const tv = new Date(props.time_value).getTime();
-      if (!isNaN(tv)) {
-        props._timestamp = tv;
-      }
+      if (!isNaN(tv)) props._timestamp = tv;
     }
 
-    // Ensure `z` property exists for axes-utils context extraction.
-    // Falls back to Z coordinate from geometry if backend didn't set it.
     if (props.z == null && f.geometry?.type === 'Polygon') {
       const firstCoord = f.geometry.coordinates?.[0]?.[0];
       if (Array.isArray(firstCoord) && firstCoord.length >= 3) {
@@ -190,7 +223,287 @@ function normalizeSpaceTimeCube(fc: any, outputIndex: number): FeatureCollection
       props._geojson = JSON.stringify(f.geometry);
     }
 
-    props._layer_config = createSpaceTimeCubeLayerConfig(dataId);
+    props._layer_config = createSpaceTimeCubeLayerConfig(dataId, hasEnv);
+
+    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
+function _normalizeStcTrajectory(fc: any): FeatureCollection {
+  const dataId = 'stc-trajectory';
+
+  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
+    const props = { ...f.properties };
+    props._dataset_type = dataId;
+
+    if (!props._geojson && f.geometry) {
+      props._geojson = JSON.stringify(f.geometry);
+    }
+
+    props._layer_config = createStcTrajectoryLayerConfig();
+    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
+// ---------------------------------------------------------------------------
+// Space-Time Prism
+// ---------------------------------------------------------------------------
+
+function normalizeSpaceTimePrism(fc: any, outputIndex: number): FeatureCollection {
+  // Backend may return either explanatory prism outputs or PASTA outputs.
+  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
+    const props = { ...f.properties };
+
+    // Remap backend height field
+    if (BACKEND_HEIGHT_FIELD in props) {
+      props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
+      delete props[BACKEND_HEIGHT_FIELD];
+    }
+    if (props._time_progress != null && props[PROCESSED_TIME_FIELD] == null) {
+      props[PROCESSED_TIME_FIELD] = props._time_progress;
+    }
+    if (props.z == null && f.geometry?.type === 'Polygon') {
+      const firstCoord = f.geometry.coordinates?.[0]?.[0];
+      if (Array.isArray(firstCoord) && firstCoord.length >= 3) {
+        props.z = firstCoord[2];
+      }
+    } else if (props.z == null && f.geometry?.type === 'MultiPolygon') {
+      const firstCoord = f.geometry.coordinates?.[0]?.[0]?.[0];
+      if (Array.isArray(firstCoord) && firstCoord.length >= 3) {
+        props.z = firstCoord[2];
+      }
+    }
+
+    const dsType = props._dataset_type ?? (
+      outputIndex === 0 ? 'space-time-prism' :
+      outputIndex === 1 ? 'potential-path-area' : 'prism-anchors'
+    );
+    props._dataset_type = dsType;
+
+    // Inject layer configs based on dataset type
+    if (dsType === 'pasta-aggregate-surface') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'pasta-aggregate-surface',
+          label: 'PASTA Potential Dwell Time',
+          isVisible: true,
+          color: [20, 126, 126],
+          colorRange: {
+            name: 'Yellow-Red',
+            type: 'sequential',
+            category: 'Uber',
+            colors: ['#FFF5EB', '#FDD49E', '#FDBB84', '#FC8D59', '#E34A33', '#B30000'],
+          },
+          visConfig: {
+            opacity: 0.75,
+            stroked: true,
+            filled: true,
+            enable3d: true,
+            wireframe: false,
+            fixedHeight: false,
+            elevationScale: 1,
+            thickness: 0.5,
+          },
+          heightField: { name: PROCESSED_HEIGHT_FIELD, type: 'float' },
+          colorField: { name: 'dwell_minutes', type: 'real' },
+        },
+      };
+    } else if (dsType === 'pasta-voxels') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'pasta-voxels',
+          label: 'PASTA Dwell-Time Voxels',
+          isVisible: true,
+          color: [255, 196, 77],
+          visConfig: {
+            opacity: 0.45,
+            stroked: false,
+            filled: true,
+            enable3d: true,
+            wireframe: false,
+            fixedHeight: true,
+            elevationScale: 1,
+          },
+          heightField: { name: PROCESSED_HEIGHT_FIELD, type: 'float' },
+        },
+      };
+    } else if (dsType === 'pasta-anchor-windows') {
+      props._layer_config = {
+        type: 'point',
+        config: {
+          dataId: 'pasta-anchor-windows',
+          label: 'PASTA Anchor Windows',
+          isVisible: true,
+          color: [220, 50, 50],
+          visConfig: {
+            opacity: 0.9,
+            radius: 20,
+            filled: true,
+            stroked: true,
+          },
+        },
+      };
+    } else if (dsType === 'space-time-prism') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'space-time-prism',
+          label: 'Space-Time Prism',
+          isVisible: true,
+          color: [88, 166, 255],
+          visConfig: {
+            opacity: 0.32,
+            stroked: true,
+            filled: true,
+            enable3d: true,
+            wireframe: false,
+            fixedHeight: true,
+            elevationScale: 1,
+            thickness: 0.5,
+          },
+          heightField: { name: PROCESSED_HEIGHT_FIELD, type: 'float' },
+          colorField: PROCESSED_TIME_FIELD,
+        },
+      };
+    } else if (dsType === 'potential-path-area') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'potential-path-area',
+          label: 'Potential Path Area (2D)',
+          isVisible: true,
+          color: [25, 135, 84],
+          visConfig: {
+            opacity: 0.12,
+            stroked: true,
+            filled: true,
+            enable3d: false,
+            thickness: 2,
+          },
+        },
+      };
+    } else if (dsType === 'prism-anchors') {
+      props._layer_config = {
+        type: 'point',
+        config: {
+          dataId: 'prism-anchors',
+          label: 'Anchor Points (A/B)',
+          isVisible: true,
+          color: [255, 100, 100],
+          visConfig: {
+            opacity: 0.9,
+            radius: 55,
+            filled: true,
+            stroked: true,
+          },
+        },
+      };
+    } else if (dsType === 'road-network-minute-buffer') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'road-network-minute-buffer',
+          label: 'Road Network Buffer Slice',
+          isVisible: true,
+          color: [11, 114, 133],
+          visConfig: {
+            opacity: 0.15,
+            stroked: true,
+            filled: true,
+            enable3d: true,
+            wireframe: false,
+            fixedHeight: true,
+            elevationScale: 1,
+            thickness: 0.5,
+          },
+          heightField: { name: PROCESSED_HEIGHT_FIELD, type: 'float' },
+        },
+      };
+    } else if (dsType === 'road-network-minute-segment') {
+      props._layer_config = {
+        type: 'geojson',
+        config: {
+          dataId: 'road-network-minute-segment',
+          label: 'Clipped Road Network',
+          isVisible: true,
+          color: [201, 42, 42],
+          visConfig: {
+            opacity: 0.9,
+            stroked: true,
+            filled: false,
+            enable3d: false,
+            thickness: 2,
+          },
+        },
+      };
+    } else if (dsType === 'ppa-road-network') {
+      // No _layer_config — deck-adapter dispatches this to a LineLayer with
+      // explicit 3D source/target positions extracted from the LineString
+      // coordinates' Z values, so the rendered roads track the per-GPS-point
+      // altitude (z = time_progress × total_height).  Per-segment colour
+      // comes from properties.color_rgba which the backend pre-computes from
+      // dwell_sec_min on the same blue→red ramp used elsewhere in the legend.
+    } else if (dsType === 'ppa-origin-points') {
+      // GPS origin points stacked 3D along the anchor time window.
+      // Sized by reachable PPA road length, colored by mean dwell time.
+      props._layer_config = {
+        type: 'point',
+        config: {
+          dataId: 'ppa-origin-points',
+          label: 'PPA Origin Points',
+          isVisible: true,
+          color: [255, 215, 0],
+          colorRange: {
+            name: 'Dwell Time (min → red)',
+            type: 'sequential',
+            category: 'Uber',
+            colors: ['#2C7BB6', '#ABD9E9', '#FFFFBF', '#FDAE61', '#D7191C'],
+          },
+          visConfig: {
+            opacity: 0.95,
+            radius: 18,
+            filled: true,
+            stroked: true,
+            strokeColor: [255, 255, 255],
+          },
+        },
+        visualChannels: {
+          colorField: { name: 'dwell_sec_mean', type: 'real' },
+          colorScale: 'quantize',
+          sizeField: { name: 'ppa_reachable_length_m', type: 'real' },
+          sizeScale: 'sqrt',
+        },
+      };
+    }
+
+    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
+// ---------------------------------------------------------------------------
+// PASTA
+// ---------------------------------------------------------------------------
+
+function normalizePasta(fc: any, outputIndex: number): FeatureCollection {
+  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
+    const props = { ...f.properties };
+
+    if (BACKEND_HEIGHT_FIELD in props) {
+      props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
+      delete props[BACKEND_HEIGHT_FIELD];
+    }
+
+    if (!props._dataset_type) {
+      props._dataset_type = outputIndex === 0 ? 'pasta-aggregate-surface' : 'road-network-minute-segment';
+    }
 
     return { type: 'Feature' as const, geometry: f.geometry, properties: props };
   });
@@ -201,26 +514,6 @@ function normalizeSpaceTimeCube(fc: any, outputIndex: number): FeatureCollection
 // ---------------------------------------------------------------------------
 // Generic (buffer, union, intersection)
 // ---------------------------------------------------------------------------
-
-function normalizeGeneric(fc: any, toolId: string): FeatureCollection {
-  const dataId = toolId; // e.g. 'buffer-analysis'
-
-  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
-    const props = { ...f.properties };
-
-    props._dataset_type = dataId;
-    props._layer_config = createGenericPolygonLayerConfig(dataId, toolId);
-
-    // Inject _geojson for kepler
-    if (!props._geojson && f.geometry) {
-      props._geojson = JSON.stringify(f.geometry);
-    }
-
-    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
-  });
-
-  return { type: 'FeatureCollection', features };
-}
 
 // ---------------------------------------------------------------------------
 // Layer Config Factories (matching frontend tool implementations)
@@ -328,7 +621,15 @@ function createStkdeLayerConfig(
   };
 }
 
-function createSpaceTimeCubeLayerConfig(dataId: string): any {
+// Quiet (low) → loud (high): blue → red, matching noise/pollution scales
+const EXPOSURE_COLOR_RANGE = {
+  name: 'Exposure',
+  type: 'sequential',
+  category: 'Custom',
+  colors: ['#2166ac', '#4393c3', '#92c5de', '#fddbc7', '#f4a582', '#d6604d', '#b2182b'],
+};
+
+function createSpaceTimeCubeLayerConfig(dataId: string, hasEnv: boolean): any {
   return {
     type: 'geojson',
     config: {
@@ -338,20 +639,14 @@ function createSpaceTimeCubeLayerConfig(dataId: string): any {
       columns: { geojson: '_geojson' },
       isVisible: true,
       color: COLORS.AQUARIUM,
-      colorRange: {
-        name: 'PM2.5',
-        type: 'diverging',
+      colorRange: hasEnv ? EXPOSURE_COLOR_RANGE : {
+        name: 'Count',
+        type: 'sequential',
         category: 'Custom',
-        colors: [
-          '#2b83ba', // low — blue
-          '#abdda4', // low-mid — green
-          '#ffffbf', // mid — yellow
-          '#fdae61', // mid-high — orange
-          '#d7191c', // high — red
-        ],
+        colors: ['#edf8fb', '#b2e2e2', '#66c2a4', '#2ca25f', '#006d2c'],
       },
       visConfig: {
-        opacity: 0.6,
+        opacity: 0.65,
         strokeOpacity: 0.8,
         thickness: 0.5,
         radius: 10,
@@ -370,7 +665,9 @@ function createSpaceTimeCubeLayerConfig(dataId: string): any {
     },
     visualChannels: {
       heightScale: 'linear',
-      colorField: { name: 'pm25', type: 'real' },
+      colorField: hasEnv
+        ? { name: 'env_value', type: 'real' }
+        : { name: 'count', type: 'integer' },
       colorScale: 'quantize',
       strokeColorField: null,
       strokeColorScale: 'quantile',
@@ -379,31 +676,34 @@ function createSpaceTimeCubeLayerConfig(dataId: string): any {
   };
 }
 
-function createGenericPolygonLayerConfig(dataId: string, toolId: string): any {
-  const labels: Record<string, string> = {
-    'buffer-analysis': 'Buffer',
-    'union-analysis': 'Union',
-    'intersection-analysis': 'Intersection',
-  };
-
+function createStcTrajectoryLayerConfig(): any {
   return {
     type: 'geojson',
     config: {
-      dataId,
+      dataId: 'stc-trajectory',
       columnMode: 'geojson',
-      label: labels[toolId] ?? toolId,
+      label: 'Trajectory Exposure',
       columns: { geojson: '_geojson' },
       isVisible: true,
-      color: COLORS.AQUARIUM,
+      color: [255, 165, 0],
+      colorRange: EXPOSURE_COLOR_RANGE,
       visConfig: {
-        opacity: 0.5,
-        strokeOpacity: 0.8,
-        thickness: 1,
+        opacity: 0.9,
+        thickness: 3,
+        filled: false,
         stroked: true,
-        filled: true,
         enable3d: false,
-        wireframe: false,
+        elevationScale: 1,
       },
+      hidden: false,
+    },
+    visualChannels: {
+      colorField: null,
+      colorScale: 'quantize',
+      sizeField: null,
+      strokeColorField: { name: 'env_exposure', type: 'real' },
+      strokeColorScale: 'quantize',
     },
   };
 }
+

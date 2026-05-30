@@ -85,6 +85,11 @@ def execute_gps_road_network_anchor_prism(
     total_budget_min_raw = options.get("totalBudgetMinutes")
 
     max_origins = max(1, int(options.get("maxOrigins", DEFAULT_MAX_ORIGINS)))
+    # Render-time perf knob: cap the number of reachable road segments emitted
+    # per origin. We keep the ones closest to the origin (highest dwell time =
+    # most "available" minutes at that destination), so the user keeps the
+    # core of the PPA and only drops the boundary fringe. 0 disables the cap.
+    max_segments_per_origin = max(0, int(options.get("maxSegmentsPerOrigin", 300)))
 
     # ── Extract GPS points between anchors ──────────────────────────────
     # Each origin carries its own Z (taken straight from the GPS point's
@@ -104,6 +109,18 @@ def execute_gps_road_network_anchor_prism(
             dtype=np.float64,
         )
         origin_ts = np.array([t1, t2], dtype=np.int64)
+
+    # ── Merge consecutive static origins ────────────────────────────────
+    # When the user dwells in roughly the same place across multiple GPS
+    # samples (cluster of points within ``clusterRadiusMeters``), collapse
+    # them into a single representative origin at the cluster centroid. The
+    # PPA changes very little inside such a cluster, so we save a lot of
+    # near-duplicate road segments without losing information. The merge is
+    # disabled by passing ``clusterRadiusMeters: 0``.
+    cluster_radius_m = float(options.get("clusterRadiusMeters", 50.0))
+    origin_lons, origin_lats, origin_zs, origin_ts, origin_sizes = _merge_static_origins(
+        origin_lons, origin_lats, origin_zs, origin_ts, cluster_radius_m,
+    )
 
     # ── Pick a metric CRS centered on the trajectory ────────────────────
     centroid_lon = float(np.mean(origin_lons))
@@ -157,7 +174,7 @@ def execute_gps_road_network_anchor_prism(
         # but still return origins (with dwell budget stubs) + anchors.
         outputs.append(_empty_gdf())
         outputs.append(_unreachable_origins_gdf(
-            origin_lons, origin_lats, origin_zs, origin_ts,
+            origin_lons, origin_lats, origin_zs, origin_ts, origin_sizes,
             total_budget_sec, min_activity_sec,
         ))
         outputs.append(_anchors_gdf(p1, p2, t1, t2, z_anchor_a, z_anchor_b))
@@ -171,7 +188,7 @@ def execute_gps_road_network_anchor_prism(
     if graph.n_edges == 0:
         outputs.append(_empty_gdf())
         outputs.append(_unreachable_origins_gdf(
-            origin_lons, origin_lats, origin_zs, origin_ts,
+            origin_lons, origin_lats, origin_zs, origin_ts, origin_sizes,
             total_budget_sec, min_activity_sec,
         ))
         outputs.append(_anchors_gdf(p1, p2, t1, t2, z_anchor_a, z_anchor_b))
@@ -193,6 +210,7 @@ def execute_gps_road_network_anchor_prism(
         # Z is taken directly from the GPS point's coordinate — same value
         # the rendered trajectory uses, so the PPA stack lines up exactly.
         z_base = float(origin_zs[i])
+        cluster_size = int(origin_sizes[i])
         # Anchor-window-relative progress, kept only for the descriptive
         # `_time_progress` field on the emitted features.
         time_progress = (ts - t1) / max(dt_ms, 1)
@@ -210,20 +228,40 @@ def execute_gps_road_network_anchor_prism(
             origin_warnings += 1
             # Still emit a stub summary so the origin layer always has one row
             # per GPS point — makes per-origin filtering on the frontend easy.
-            origin_summaries.append(_unreachable_origin_summary(
+            summary = _unreachable_origin_summary(
                 i, lon, lat, ts, time_progress, z_base,
                 total_budget_sec, min_activity_sec,
-            ))
+            )
+            summary["cluster_size"] = cluster_size
+            origin_summaries.append(summary)
             continue
 
-        # Per-origin aggregates over the reachable PPA segments.
-        seg_count = len(result.features)
+        # Per-origin aggregates over the reachable PPA segments. We compute
+        # length + dwell stats across the *full* PPA so the summary stays
+        # honest, then optionally subsample which segments get rendered.
+        full_seg_count = len(result.features)
         total_len_m = 0.0
         dwell_mids: list[float] = []
         for feat in result.features:
             total_len_m += _segment_length_m(graph, feat.edge_id, feat.interval_a, feat.interval_b)
             dwell_mids.append(float(feat.activity_sec_mid))
 
+        if (
+            max_segments_per_origin > 0
+            and full_seg_count > max_segments_per_origin
+        ):
+            # Keep the segments closest to the origin (highest activity_sec_min).
+            # Reverse-sort so the trimmed tail is the lowest-dwell fringe.
+            render_feats = sorted(
+                result.features,
+                key=lambda f: float(f.activity_sec_min),
+                reverse=True,
+            )[:max_segments_per_origin]
+        else:
+            render_feats = result.features
+        seg_count = len(render_feats)
+
+        for feat in render_feats:
             line = feature_linestring(feat)
             line_3d = _lift_geom_z(line, z_base)
             # Pre-compute the RGBA so the frontend LineLayer can colour by
@@ -258,6 +296,7 @@ def execute_gps_road_network_anchor_prism(
                 "total_budget_sec": float(total_budget_sec),
                 "min_activity_sec": float(min_activity_sec),
                 "color_rgba": rgba,
+                "cluster_size": cluster_size,
                 "_dataset_type": "ppa-road-network",
             })
 
@@ -284,8 +323,12 @@ def execute_gps_road_network_anchor_prism(
             "activity_sec_max": float(total_budget_sec),
             "activity_sec_min": float(min_activity_sec),
             "activity_sec_mean": float(mean_dwell),
-            # PPA extent metrics
-            "ppa_reachable_segments": int(seg_count),
+            "cluster_size": cluster_size,
+            # PPA extent metrics — `ppa_reachable_segments` is the full
+            # reachable count; `ppa_rendered_segments` is how many actually
+            # got emitted as LineStrings after the per-origin render cap.
+            "ppa_reachable_segments": int(full_seg_count),
+            "ppa_rendered_segments": int(seg_count),
             "ppa_reachable_length_m": float(total_len_m),
             "snap_distance_m": float(result.snap_distance_m),
             "reachable": True,
@@ -312,6 +355,77 @@ def execute_gps_road_network_anchor_prism(
 # ────────────────────────────────────────────────────────────────────────
 # helpers
 # ────────────────────────────────────────────────────────────────────────
+
+def _merge_static_origins(
+    lons: np.ndarray,
+    lats: np.ndarray,
+    zs: np.ndarray,
+    ts: np.ndarray,
+    cluster_radius_m: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Collapse consecutive GPS points that stay within ``cluster_radius_m``.
+
+    Greedy: walk the sorted samples and keep extending the current cluster
+    while the next point sits within ``cluster_radius_m`` of the cluster's
+    running mean centroid. When a point falls outside, close the cluster
+    and start a new one. Each cluster is then emitted as a single origin
+    at its geometric centroid (mean lon/lat), with median Z and median
+    timestamp. A parallel ``sizes`` array records the cluster membership
+    count so downstream summaries can show how many GPS points each PPA
+    represents.
+
+    Passing ``cluster_radius_m <= 0`` disables merging (identity).
+    """
+    n = int(len(lons))
+    if n == 0:
+        empty_i = np.empty(0, dtype=np.int64)
+        empty_f = np.empty(0, dtype=np.float64)
+        return empty_f, empty_f, empty_f, empty_i, empty_i
+    if cluster_radius_m <= 0 or n == 1:
+        return lons, lats, zs, ts, np.ones(n, dtype=np.int64)
+
+    groups: list[tuple[int, int]] = []
+    start = 0
+    cx = float(lons[0])
+    cy = float(lats[0])
+    count = 1
+    for i in range(1, n):
+        d = _planar_meters(cx, cy, float(lons[i]), float(lats[i]))
+        if d <= cluster_radius_m:
+            count += 1
+            # Incremental running mean centroid.
+            cx += (float(lons[i]) - cx) / count
+            cy += (float(lats[i]) - cy) / count
+        else:
+            groups.append((start, i - 1))
+            start = i
+            cx = float(lons[i])
+            cy = float(lats[i])
+            count = 1
+    groups.append((start, n - 1))
+
+    out_lons = np.empty(len(groups), dtype=np.float64)
+    out_lats = np.empty(len(groups), dtype=np.float64)
+    out_zs = np.empty(len(groups), dtype=np.float64)
+    out_ts = np.empty(len(groups), dtype=np.int64)
+    out_sizes = np.empty(len(groups), dtype=np.int64)
+    for idx, (s, e) in enumerate(groups):
+        sl = slice(s, e + 1)
+        out_lons[idx] = float(np.mean(lons[sl]))
+        out_lats[idx] = float(np.mean(lats[sl]))
+        out_zs[idx] = float(np.median(zs[sl]))
+        out_ts[idx] = int(np.median(ts[sl]))
+        out_sizes[idx] = e - s + 1
+    return out_lons, out_lats, out_zs, out_ts, out_sizes
+
+
+def _planar_meters(lon_a: float, lat_a: float, lon_b: float, lat_b: float) -> float:
+    """Equirectangular distance — accurate enough for ~tens-of-metre thresholds."""
+    cos_lat = math.cos(math.radians((lat_a + lat_b) * 0.5))
+    dx = (lon_b - lon_a) * 111_000.0 * cos_lat
+    dy = (lat_b - lat_a) * 111_000.0
+    return math.hypot(dx, dy)
+
 
 def _auto_total_budget_sec(
     total_budget_min_raw: Any,
@@ -513,6 +627,7 @@ def _origins_gdf_with_dwell(
 
 def _unreachable_origins_gdf(
     lons: np.ndarray, lats: np.ndarray, zs: np.ndarray, ts: np.ndarray,
+    sizes: np.ndarray,
     total_budget_sec: float, min_activity_sec: float,
 ) -> gpd.GeoDataFrame:
     """Build the origins layer when no PPA could be computed (no road network)."""
@@ -524,10 +639,12 @@ def _unreachable_origins_gdf(
         t_min, t_range = 0.0, 1.0
     for i in range(len(lons)):
         progress = (float(ts[i]) - t_min) / t_range
-        summaries.append(_unreachable_origin_summary(
+        summary = _unreachable_origin_summary(
             i, float(lons[i]), float(lats[i]), int(ts[i]),
             progress, float(zs[i]), total_budget_sec, min_activity_sec,
-        ))
+        )
+        summary["cluster_size"] = int(sizes[i])
+        summaries.append(summary)
     return _origins_gdf_with_dwell(lons, lats, summaries)
 
 

@@ -7,7 +7,7 @@ export interface DataSource {
   name: string;
   data: FeatureCollection;
   createdAt: string;
-  
+
   // Only essential metadata
   featureCount: number;
   bounds?: {
@@ -16,7 +16,11 @@ export interface DataSource {
     minLng: number;
     maxLng: number;
   };
-  
+
+  // Pre-extracted field names — always populated for large files where
+  // data.features is an empty stub (real data lives in large-file-cache).
+  fieldNames?: string[];
+
   // Simple lineage
   derivedFrom?: string; // Parent data source ID
   createdBy?: string;   // Tool ID that created this

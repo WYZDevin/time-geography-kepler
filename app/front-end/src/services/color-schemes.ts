@@ -162,7 +162,7 @@ export const getColorSchemesByType = (
 };
 
 /**
- * Convert hex colors to RGB array for Kepler.gl
+ * Convert hex colors to RGB array for deck.gl layers
  */
 export const hexToRgb = (hex: string): [number, number, number] => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);

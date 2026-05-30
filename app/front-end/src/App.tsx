@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { shallowEqual, useSelector } from 'react-redux';
 import { RootState } from './stores/store';
 import { AppProvider } from './contexts/app-context';
 import WorkflowContainer from './components/workflow/workflow-container';
 import DataPanel from './components/data-panel/data-panel';
-import KeplerGl from '@kepler.gl/components';
-import { mapStyleChange, wrapTo } from '@kepler.gl/actions';
 import ProgressDialog from './components/custom-components/progress-bar';
 import { progressService } from './components/custom-components/progress-bar';
 import { Button } from './components/ui/button';
@@ -15,31 +13,19 @@ import { ErrorBoundary } from './components/error-boundary';
 import { useKeyboardShortcuts } from './hooks/use-keyboard-shortcuts';
 import { useBackendInit } from './hooks/use-backend-init';
 import SettingsPanel from './components/settings/settings-panel';
+import { DeckMapView } from './components/deck-map-view';
 import {
   Dialog,
   DialogContent,
 } from './components/ui/dialog';
 
-const MAP_STYLE_BY_SETTING: Record<'light' | 'dark' | 'satellite', string> = {
-  light: 'positron',
-  dark: 'dark-matter',
-  satellite: 'satellite'
-};
-
-const THEME_BY_SETTING: Record<'light' | 'dark' | 'satellite', 'light' | 'dark'> = {
-  light: 'light',
-  dark: 'dark',
-  satellite: 'light'
-};
 
 const AppContent = () => {
-  const dispatch = useDispatch();
-  const dataSources = useSelector((state: RootState) => Object.values(state.data.dataSources));
-  const settings = useSelector((state: RootState) => state.settings);
-  const keplerInstanceReady = useSelector((state: RootState) => Boolean(state.keplerGl.kepler));
-  const currentMapStyle = useSelector(
-    (state: RootState) => state.keplerGl.kepler?.mapStyle?.styleType
+  const dataSources = useSelector(
+    (state: RootState) => Object.values(state.data.dataSources),
+    shallowEqual,
   );
+  const settings = useSelector((state: RootState) => state.settings);
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(true);
   const [isToolboxCollapsed, setIsToolboxCollapsed] = useState(false);
   const [isDataPanelOpen, setIsDataPanelOpen] = useState(false);
@@ -47,13 +33,7 @@ const AppContent = () => {
 
   const [hasAutoOpenedSidePanel, setHasAutoOpenedSidePanel] = useState(false);
 
-  const mapStyleType = MAP_STYLE_BY_SETTING[settings.defaultMapStyle];
-  const keplerTheme = THEME_BY_SETTING[settings.defaultMapStyle];
-  const mapboxToken = (
-    import.meta.env.VITE_MAPBOX_API_KEY ||
-    import.meta.env.VITE_MAPBOX_TOKEN ||
-    ''
-  ).trim();
+  const isDark = settings.defaultMapStyle === 'dark';
 
   // Enable keyboard shortcuts
   useKeyboardShortcuts();
@@ -64,7 +44,6 @@ const AppContent = () => {
   // Clean up on unmount
   useEffect(() => {
     return () => {
-      // Clean up any pending progress operations
       progressService.reset();
     };
   }, []);
@@ -78,24 +57,12 @@ const AppContent = () => {
   }, [dataSources.length, hasAutoOpenedSidePanel]);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', keplerTheme === 'dark');
-  }, [keplerTheme]);
-
-  useEffect(() => {
-    if (!keplerInstanceReady || !mapStyleType) {
-      return;
-    }
-
-    if (currentMapStyle === mapStyleType) {
-      return;
-    }
-
-    dispatch(wrapTo('kepler', mapStyleChange(mapStyleType)));
-  }, [dispatch, keplerInstanceReady, mapStyleType, currentMapStyle]);
+    document.documentElement.classList.toggle('dark', isDark);
+  }, [isDark]);
 
   const sidePanelWidth = isSidePanelOpen ? 600 : 0;
   const mapWidth = window.innerWidth - sidePanelWidth;
-  const keplerHeight = window.innerHeight - 80;
+  const mapHeight = window.innerHeight - 80;
 
 
   return (
@@ -128,16 +95,10 @@ const AppContent = () => {
       <div className="flex h-[calc(100vh-60px)] w-full overflow-hidden">
         <ProgressDialog />
         
-        {/* Left side: Kepler.gl map */}
+        {/* Left side: deck.gl map */}
         <div className="flex-1 relative h-full">
           <div className="absolute top-0 left-0 w-full h-full z-0">
-            <KeplerGl
-              width={mapWidth}
-              height={keplerHeight}
-              id="kepler"
-              mapboxApiAccessToken={mapboxToken || undefined}
-              theme={keplerTheme}
-            />
+            <DeckMapView width={mapWidth} height={mapHeight} />
           </div>
         </div>
 

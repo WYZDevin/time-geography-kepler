@@ -43,6 +43,7 @@ const workflowSlice = createSlice({
         selectTool: (state, action: PayloadAction<string>) => {
             state.selectedToolId = action.payload;
             state.currentStep = 'options';
+            state.executionMode = null;
         },
         setCurrentStep: (state, action: PayloadAction<ToolWorkflowState['currentStep']>) => {
             state.currentStep = action.payload;

@@ -15,7 +15,7 @@ class BackendApiService {
   private _available = false;
 
   constructor() {
-    this._baseUrl = (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8000';
+    this._baseUrl = ((import.meta.env.VITE_BACKEND_URL as string | undefined) ?? '').trim();
     // Strip trailing slash
     this._baseUrl = this._baseUrl.replace(/\/+$/, '');
   }

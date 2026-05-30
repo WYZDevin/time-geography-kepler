@@ -9,7 +9,7 @@ export interface LayerConfig {
 
 export class VisualizationService {
   /**
-   * Creates Kepler.gl layer configuration from tool output
+   * Creates layer configuration from tool output
    */
   createLayersFromToolOutput(
     toolId: string,

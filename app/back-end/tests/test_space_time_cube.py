@@ -28,7 +28,8 @@ def test_space_time_cube_basic(client, sample_points):
     # Check key properties on the first feature
     props = fc["features"][0]["properties"]
     assert "count" in props
-    assert "pm25" in props
+    # env_value replaced the old pm25 mock — it is None when no env field is bound
+    assert "env_value" in props
     assert "z" in props
     assert "z_axis" in props
     assert "time_slice_index" in props

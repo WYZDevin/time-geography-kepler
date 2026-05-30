@@ -4,7 +4,6 @@ import { RootState } from '../../../stores/store';
 import { setToolOptions, setSelectedDataSource, setFieldMapping, setExecutionMode, proceedToVisualization } from '../../../stores/workflow-slice';
 import { selectAllDataSources, DataSource } from '../../../stores/data-slice';
 import { useResolvedCapabilities } from '@/services/execution-resolver';
-import { ExecutionMode } from '@/interfaces/simple-tool';
 import { Button } from '../../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
@@ -24,7 +23,40 @@ import {
     Monitor,
     Server,
     AlertTriangle,
+    Clock,
 } from 'lucide-react';
+
+const PRISM_PASTA_OPTIONS = new Set([
+    'analysisMode',
+    'speedMode',
+    'customSpeed',
+    'personIdField',
+    'activityTypeField',
+    'endTimeField',
+    'modeField',
+    'weightField',
+    'scenarioName',
+    'fixedActivityTypes',
+    'flexibleActivityTypes',
+    'minimumActivityMinutes',
+    'spatialResolutionMeters',
+    'temporalResolutionMinutes',
+    'showVoxels',
+    'maxVoxels',
+    'showAxes',
+    'timeBreaks',
+]);
+
+const PRISM_INTERACTIVE_OPTIONS = new Set([
+    'analysisMode',
+    'prismMode',
+    'speedMode',
+    'customSpeed',
+    'timeSlices',
+    'showPPA',
+    'showAxes',
+    'timeBreaks',
+]);
 
 const UnifiedToolOptionsStep = () => {
     const dispatch = useDispatch();
@@ -34,13 +66,14 @@ const UnifiedToolOptionsStep = () => {
     const selectedDataSource = useSelector((state: RootState) =>
         selectedDataSourceId ? state.data.dataSources[selectedDataSourceId] : null
     );
+    const selectedAnchors = useSelector((state: RootState) => state.map.selectedAnchors);
 
     const caps = useResolvedCapabilities(selectedToolId);
     const executionMode = useSelector((state: RootState) => state.workflow.executionMode);
 
     const [dataSourceDialogOpen, setDataSourceDialogOpen] = useState(false);
 
-    const [options, setOptions] = useState<Record<string, boolean | string | number | FeatureCollection | null>>({});
+    const [options, setOptions] = useState<Record<string, unknown>>({});
     const [mapping, setMapping] = useState<AttributeMapping>({
         time: '',
         value: '',
@@ -55,11 +88,10 @@ const UnifiedToolOptionsStep = () => {
             const schema = toolInstance?.getOptionSchema() || [];
 
             // Initialize options with default values
-            const defaultOptions: Record<string, boolean | string | number | FeatureCollection | null> = {};
+            const defaultOptions: Record<string, unknown> = {};
             schema.forEach(opt => {
                 // Type assertion to handle the union type properly
-                const defaultValue = opt.defaultValue as boolean | string | number | FeatureCollection | null | undefined;
-                defaultOptions[opt.key] = defaultValue ?? null;
+                defaultOptions[opt.key] = opt.defaultValue ?? null;
             });
             setOptions(defaultOptions);
         }
@@ -95,7 +127,7 @@ const UnifiedToolOptionsStep = () => {
     }, [selectedDataSourceId]); // Only depend on ID, not the data object
 
 
-    const handleOptionChange = (key: string, value: boolean | string | number | FeatureCollection | null) => {
+    const handleOptionChange = (key: string, value: unknown) => {
         setOptions(prev => ({
             ...prev,
             [key]: value
@@ -130,10 +162,30 @@ const UnifiedToolOptionsStep = () => {
             return;
         }
 
-        // For backend_only tools, ensure mode is set to backend
-        if (caps.effectivePolicy === 'backend_only') {
-            dispatch(setExecutionMode('backend'));
+        const isSpaceTimePrism = selectedToolId === 'space-time-prism';
+        const prismAnalysisMode = options.analysisMode as string | undefined;
+        if (isSpaceTimePrism && prismAnalysisMode === 'interactive' && selectedAnchors.length < 2) {
+            alert('Select two map anchors before running an individual prism.');
+            return;
         }
+
+        const nextExecutionMode =
+            isSpaceTimePrism && prismAnalysisMode === 'pasta'
+                ? 'backend'
+                : isSpaceTimePrism && prismAnalysisMode === 'interactive'
+                    ? (caps.canRunBackend ? 'backend' : 'frontend')
+                    : caps.effectivePolicy === 'frontend_only'
+                ? 'frontend'
+                : caps.effectivePolicy === 'backend_only'
+                    ? 'backend'
+                    : executionMode ?? caps.defaultMode;
+
+        if (nextExecutionMode === 'backend' && !caps.canRunBackend) {
+            alert('Backend execution is currently unavailable for this tool.');
+            return;
+        }
+
+        dispatch(setExecutionMode(nextExecutionMode));
 
         dispatch(setToolOptions(options));
         dispatch(proceedToVisualization());
@@ -141,6 +193,7 @@ const UnifiedToolOptionsStep = () => {
 
     const renderOptionInput = (option: any) => { // Generic since ToolOption is not available
         const value = options[option.key] ?? option.defaultValue;
+        const stringValue = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 
         switch (option.type) {
             case 'boolean':
@@ -156,7 +209,7 @@ const UnifiedToolOptionsStep = () => {
                         </div>
                         <input
                             type="checkbox"
-                            checked={value || false}
+                            checked={Boolean(value)}
                             onChange={(e) => handleOptionChange(option.key, e.target.checked)}
                             className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
                         />
@@ -175,7 +228,7 @@ const UnifiedToolOptionsStep = () => {
                         )}
                         <input
                             type="number"
-                            value={value || numOption.defaultValue || 0}
+                            value={Number(value ?? numOption.defaultValue ?? 0)}
                             onChange={(e) => {
                                 const newValue = parseFloat(e.target.value);
                                 handleOptionChange(option.key, isNaN(newValue) ? 0 : newValue);
@@ -200,7 +253,7 @@ const UnifiedToolOptionsStep = () => {
                         )}
                         <input
                             type="text"
-                            value={value || option.defaultValue || ''}
+                            value={stringValue || String(option.defaultValue ?? '')}
                             onChange={(e) => handleOptionChange(option.key, e.target.value)}
                             className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         />
@@ -218,7 +271,7 @@ const UnifiedToolOptionsStep = () => {
                             <p className="text-xs text-gray-500 mb-2">{option.description}</p>
                         )}
                         <select
-                            value={value || selectOption.defaultValue || ''}
+                            value={stringValue || String(selectOption.defaultValue ?? '')}
                             onChange={(e) => handleOptionChange(option.key, e.target.value)}
                             className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         >
@@ -244,7 +297,12 @@ const UnifiedToolOptionsStep = () => {
                         )}
                         <DatasetSelector
                             value={typeof value === 'string' ? value : ''}
-                            onChange={(datasetId) => handleOptionChange(option.key, datasetId)}
+                            onChange={(datasetId) => {
+                                handleOptionChange(option.key, datasetId);
+                                // Do NOT copy ds.data into options — large files would
+                                // make React state and Redux slow. The analysis engine
+                                // resolves data from large-file-cache at run time.
+                            }}
                             placeholder={`Select ${option.label.toLowerCase()}...`}
                             required={datasetOption.required || false}
                         />
@@ -301,6 +359,55 @@ const UnifiedToolOptionsStep = () => {
                             <div className="pl-6 border-l-2 border-blue-200">
                                 {renderFieldMappingForDataset(selectedDataset.data)}
                             </div>
+                        )}
+                    </div>
+                );
+            }
+
+            case 'field': {
+                // If sourceDatasetOptionKey is set, read columns from that secondary
+                // dataset by ID. For large files the dataset stub has pre-extracted
+                // fieldNames; for small files we fall back to extractFieldNames(data).
+                const srcKey = (option as any).sourceDatasetOptionKey as string | undefined;
+                let dataFields: string[];
+                if (srcKey) {
+                    const srcId = options[srcKey] as string | undefined;
+                    const srcDs = srcId ? dataSources.find(d => d.id === srcId) : undefined;
+                    let allFields: string[];
+                    if (srcDs?.fieldNames?.length) {
+                        allFields = srcDs.fieldNames;
+                    } else {
+                        allFields = srcDs?.data ? extractFieldNames(srcDs.data) : [];
+                    }
+                    dataFields = allFields.filter((n: string) => !n.startsWith('_'));
+                } else {
+                    const allFields = selectedDataSource
+                        ? extractFieldNames(selectedDataSource.data)
+                        : [];
+                    dataFields = allFields.filter(n => !n.startsWith('_'));
+                }
+                const emptyMsg = srcKey ? 'Select an environment dataset first' : 'Select a data source first';
+                return (
+                    <div key={option.key} className="p-3 border rounded-lg">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                            {option.label}
+                        </label>
+                        {option.description && (
+                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
+                        )}
+                        {dataFields.length === 0 ? (
+                            <p className="text-xs text-gray-400 italic">{emptyMsg}</p>
+                        ) : (
+                            <select
+                                value={stringValue}
+                                onChange={(e) => handleOptionChange(option.key, e.target.value)}
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                                <option value="">-- None --</option>
+                                {dataFields.map(name => (
+                                    <option key={name} value={name}>{name}</option>
+                                ))}
+                            </select>
                         )}
                     </div>
                 );
@@ -380,7 +487,22 @@ const UnifiedToolOptionsStep = () => {
     }
 
     const toolInstance = toolRegistry.getTool(selectedTool.id);
-    const toolOptions = toolInstance?.getOptionSchema() || [];
+    const rawToolOptions = toolInstance?.getOptionSchema() || [];
+    const prismAnalysisMode = selectedTool.id === 'space-time-prism'
+        ? ((options.analysisMode as string | undefined) ?? 'pasta')
+        : null;
+    const toolOptions = selectedTool.id === 'space-time-prism'
+        ? rawToolOptions.filter(option => {
+            const visible = (prismAnalysisMode === 'interactive' ? PRISM_INTERACTIVE_OPTIONS : PRISM_PASTA_OPTIONS).has(option.key);
+            if (!visible) return false;
+            if (option.key === 'customSpeed' && options.speedMode !== 'custom') return false;
+            if (option.key === 'maxVoxels' && options.showVoxels === false) return false;
+            return true;
+        })
+        : rawToolOptions;
+    const effectiveExecutionMode = selectedTool.id === 'space-time-prism'
+        ? (prismAnalysisMode === 'interactive' ? (caps.canRunBackend ? 'backend' : 'frontend') : 'backend')
+        : (executionMode ?? caps.defaultMode);
 
     return (
         <div className="h-full flex flex-col p-6 overflow-auto space-y-6">
@@ -487,8 +609,57 @@ const UnifiedToolOptionsStep = () => {
                 </DialogContent>
             </Dialog>
 
+            {/* Datetime Column Selector — shown when the tool uses time attributes */}
+            {selectedDataSource && selectedTool && toolInstance?.attributeMapping?.time != null && prismAnalysisMode !== 'interactive' && (() => {
+                const fieldNames = extractFieldNames(selectedDataSource.data);
+                return (
+                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50">
+                        <label className="flex items-center gap-2 text-sm font-medium text-amber-800 mb-2">
+                            <Clock className="w-4 h-4" />
+                            Datetime Column
+                        </label>
+                        <p className="text-xs text-amber-700 mb-2">
+                            Select the column containing date/time values (continuous timestamps).
+                        </p>
+                        <select
+                            value={mapping.time || ''}
+                            onChange={(e) => handleFieldMappingChange('time', e.target.value)}
+                            className="w-full p-2 text-sm border border-amber-300 rounded-lg bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                        >
+                            <option value="">-- Select datetime column --</option>
+                            {fieldNames.map(name => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
+                        {mapping.time && (
+                            <p className="text-xs text-green-700 mt-1 flex items-center gap-1">
+                                <Check className="w-3 h-3" />
+                                Using &ldquo;{mapping.time}&rdquo; as the time reference
+                            </p>
+                        )}
+                    </div>
+                );
+            })()}
+
+            {selectedTool.id === 'space-time-prism' && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${
+                    effectiveExecutionMode === 'backend'
+                        ? 'bg-orange-50 border-orange-200 text-orange-800'
+                        : 'bg-blue-50 border-blue-200 text-blue-800'
+                }`}>
+                    {effectiveExecutionMode === 'backend'
+                        ? <Server className="w-4 h-4 flex-shrink-0" />
+                        : <Monitor className="w-4 h-4 flex-shrink-0" />}
+                    <span>
+                        {effectiveExecutionMode === 'backend'
+                            ? `${prismAnalysisMode === 'interactive' ? 'Individual prism' : 'PASTA surface'} runs on the backend server`
+                            : `Individual prism uses browser execution · ${selectedAnchors.length}/2 anchors selected`}
+                    </span>
+                </div>
+            )}
+
             {/* Execution Mode Selector */}
-            {caps.effectivePolicy === 'hybrid' && (
+            {caps.effectivePolicy === 'hybrid' && selectedTool.id !== 'space-time-prism' && (
                 <Card>
                     <CardHeader className="pb-2">
                         <CardTitle className="text-base flex items-center gap-2">
@@ -566,7 +737,11 @@ const UnifiedToolOptionsStep = () => {
                     onClick={handleSubmit}
                     className="flex items-center gap-2"
                 >
-                    Run Analysis
+                    {selectedTool.id === 'space-time-prism' && prismAnalysisMode === 'pasta'
+                        ? 'Compute PASTA Surface'
+                        : selectedTool.id === 'space-time-prism'
+                            ? 'Build Individual Prism'
+                            : 'Run Analysis'}
                     <ArrowRight className="w-4 h-4" />
                 </Button>
             </div>

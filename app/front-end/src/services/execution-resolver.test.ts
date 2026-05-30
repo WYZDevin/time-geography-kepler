@@ -61,6 +61,28 @@ describe('resolveToolCapabilities', () => {
     expect(result.defaultMode).toBe('backend');
   });
 
+  it('does not promote a frontend_only tool to hybrid when a backend tool has the same id', () => {
+    vi.mocked(toolRegistry.getTool).mockReturnValue(mockFrontendTool('frontend_only') as any);
+    const backendTools = [mockBackendTool('test-tool', 'hybrid')];
+
+    const result = resolveToolCapabilities('test-tool', true, backendTools as any);
+    expect(result.canRunFrontend).toBe(true);
+    expect(result.canRunBackend).toBe(false);
+    expect(result.effectivePolicy).toBe('frontend_only');
+    expect(result.defaultMode).toBe('frontend');
+  });
+
+  it('treats a backend_only frontend stub as server-only', () => {
+    vi.mocked(toolRegistry.getTool).mockReturnValue(mockFrontendTool('backend_only') as any);
+    const backendTools = [mockBackendTool('test-tool', 'backend_only')];
+
+    const result = resolveToolCapabilities('test-tool', true, backendTools as any);
+    expect(result.canRunFrontend).toBe(false);
+    expect(result.canRunBackend).toBe(true);
+    expect(result.effectivePolicy).toBe('backend_only');
+    expect(result.defaultMode).toBe('backend');
+  });
+
   it('disables backend_only tool when backend is offline', () => {
     const backendTools = [mockBackendTool('test-tool', 'backend_only')];
 

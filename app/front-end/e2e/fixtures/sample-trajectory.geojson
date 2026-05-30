@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4194,37.7749]},"properties":{"timestamp":"2024-01-01T08:00:00Z","user_id":"user_001","activity":"walking","speed":5.2,"latitude":37.7749,"longitude":-122.4194}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4190,37.7750]},"properties":{"timestamp":"2024-01-01T08:05:00Z","user_id":"user_001","activity":"walking","speed":4.8,"latitude":37.7750,"longitude":-122.4190}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4185,37.7755]},"properties":{"timestamp":"2024-01-01T08:10:00Z","user_id":"user_001","activity":"driving","speed":25.3,"latitude":37.7755,"longitude":-122.4185}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4180,37.7760]},"properties":{"timestamp":"2024-01-01T08:15:00Z","user_id":"user_001","activity":"driving","speed":30.1,"latitude":37.7760,"longitude":-122.4180}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4170,37.7770]},"properties":{"timestamp":"2024-01-01T08:20:00Z","user_id":"user_001","activity":"driving","speed":28.5,"latitude":37.7770,"longitude":-122.4170}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4160,37.7780]},"properties":{"timestamp":"2024-01-01T08:25:00Z","user_id":"user_001","activity":"stationary","speed":0.0,"latitude":37.7780,"longitude":-122.4160}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4160,37.7780]},"properties":{"timestamp":"2024-01-01T08:30:00Z","user_id":"user_001","activity":"stationary","speed":0.0,"latitude":37.7780,"longitude":-122.4160}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4155,37.7785]},"properties":{"timestamp":"2024-01-01T08:35:00Z","user_id":"user_001","activity":"walking","speed":4.5,"latitude":37.7785,"longitude":-122.4155}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4150,37.7790]},"properties":{"timestamp":"2024-01-01T08:40:00Z","user_id":"user_001","activity":"walking","speed":5.0,"latitude":37.7790,"longitude":-122.4150}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4145,37.7795]},"properties":{"timestamp":"2024-01-01T08:45:00Z","user_id":"user_001","activity":"walking","speed":4.9,"latitude":37.7795,"longitude":-122.4145}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4300,37.7600]},"properties":{"timestamp":"2024-01-01T08:00:00Z","user_id":"user_002","activity":"driving","speed":35.2,"latitude":37.7600,"longitude":-122.4300}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4290,37.7610]},"properties":{"timestamp":"2024-01-01T08:05:00Z","user_id":"user_002","activity":"driving","speed":38.5,"latitude":37.7610,"longitude":-122.4290}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4280,37.7620]},"properties":{"timestamp":"2024-01-01T08:10:00Z","user_id":"user_002","activity":"driving","speed":40.1,"latitude":37.7620,"longitude":-122.4280}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4270,37.7630]},"properties":{"timestamp":"2024-01-01T08:15:00Z","user_id":"user_002","activity":"stationary","speed":0.0,"latitude":37.7630,"longitude":-122.4270}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4270,37.7630]},"properties":{"timestamp":"2024-01-01T08:20:00Z","user_id":"user_002","activity":"stationary","speed":0.0,"latitude":37.7630,"longitude":-122.4270}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4265,37.7635]},"properties":{"timestamp":"2024-01-01T08:25:00Z","user_id":"user_002","activity":"walking","speed":3.8,"latitude":37.7635,"longitude":-122.4265}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4260,37.7640]},"properties":{"timestamp":"2024-01-01T08:30:00Z","user_id":"user_002","activity":"walking","speed":4.2,"latitude":37.7640,"longitude":-122.4260}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4255,37.7645]},"properties":{"timestamp":"2024-01-01T08:35:00Z","user_id":"user_002","activity":"walking","speed":4.0,"latitude":37.7645,"longitude":-122.4255}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4250,37.7650]},"properties":{"timestamp":"2024-01-01T08:40:00Z","user_id":"user_002","activity":"driving","speed":32.5,"latitude":37.7650,"longitude":-122.4250}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[-122.4240,37.7660]},"properties":{"timestamp":"2024-01-01T08:45:00Z","user_id":"user_002","activity":"driving","speed":35.0,"latitude":37.7660,"longitude":-122.4240}}
+  ]
+}

@@ -27,21 +27,23 @@ export function resolveToolCapabilities(
 ): ResolvedCapabilities {
   const frontendTool = toolRegistry.getTool(toolId);
   const backendTool = backendTools.find(t => t.id === toolId);
+  const frontendPolicy = frontendTool?.capabilities.executionPolicy;
+  const backendPolicy = backendTool?.executionPolicy as ExecutionPolicy | undefined;
 
-  const canRunFrontend = !!frontendTool;
-  const canRunBackend = backendAvailable && !!backendTool;
+  const canRunFrontend = !!frontendTool && frontendPolicy !== 'backend_only';
+  const canRunBackend =
+    backendAvailable &&
+    !!backendTool &&
+    frontendPolicy !== 'frontend_only' &&
+    backendPolicy !== 'frontend_only';
 
-  // Determine effective policy by combining what both sides offer.
-  // The backend's executionPolicy describes what IT supports, not a system-wide override.
-  // If the frontend has an implementation, the tool can always run in-browser regardless
-  // of what the backend declares about itself.
+  // The frontend registry is the UI contract. A backend tool with the same id
+  // must not promote a frontend_only visualization into a backend option.
   let effectivePolicy: ExecutionPolicy;
-  if (canRunFrontend && backendTool) {
-    effectivePolicy = 'hybrid';
-  } else if (canRunFrontend) {
-    effectivePolicy = frontendTool!.capabilities.executionPolicy;
+  if (frontendTool) {
+    effectivePolicy = frontendPolicy!;
   } else if (backendTool) {
-    effectivePolicy = backendTool.executionPolicy as ExecutionPolicy;
+    effectivePolicy = backendPolicy!;
   } else {
     effectivePolicy = 'frontend_only';
   }

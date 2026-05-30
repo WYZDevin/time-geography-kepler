@@ -1,7 +1,10 @@
 import time
+from datetime import UTC, datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
+from pydantic import ValidationError
 
+from .models import ErrorResponse, ExecuteRequest, ExecutionMetadata, HealthResponse, ListToolsResponse
 from .tool_registry import registry
 from .utils import build_response, gdf_to_geojson, geojson_to_gdf
 
@@ -9,56 +12,52 @@ api = Blueprint("api", __name__, url_prefix="/api/v1")
 
 
 @api.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "healthy", "version": "1.0.0"})
+def health() -> Response:
+    return jsonify(HealthResponse(status="healthy", version="1.0.0").model_dump())
 
 
 @api.route("/tools", methods=["GET"])
-def list_tools():
+def list_tools() -> Response:
     tools = [t.metadata() for t in registry.all_tools()]
-    return jsonify({"tools": tools})
+    return jsonify(ListToolsResponse(tools=tools).model_dump())
 
 
 @api.route("/tools/<tool_id>/execute", methods=["POST"])
-def execute_tool(tool_id: str):
+def execute_tool(tool_id: str) -> Response | tuple[Response, int]:
     tool = registry.get(tool_id)
     if tool is None:
-        return jsonify({"success": False, "error": f"Unknown tool: {tool_id}"}), 404
+        return jsonify(ErrorResponse(error=f"Unknown tool: {tool_id}").model_dump()), 404
 
-    body = request.get_json(silent=True) or {}
-    data = body.get("data", {"type": "FeatureCollection", "features": []})
-    options = body.get("options", {})
-    attributes = body.get("attributes", {})
-    source_dataset_ids = body.get("sourceDatasetIds", [])
+    try:
+        req = ExecuteRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as exc:
+        return jsonify(ErrorResponse(error=str(exc)).model_dump()), 422
 
     start = time.time()
     try:
-        gdf = geojson_to_gdf(data)
-        result_gdfs = tool.execute(gdf, options, attributes)
+        gdf = geojson_to_gdf(req.data)
+        result_gdfs = tool.execute(gdf, req.options, req.attributes)
         outputs = [gdf_to_geojson(r) for r in result_gdfs]
+        warnings = [w for r in result_gdfs for w in r.attrs.get("warnings", [])]
     except Exception as exc:
-        return jsonify(
-            {
-                "success": False,
-                "toolId": tool_id,
-                "error": str(exc),
-                "outputs": [],
-                "metadata": {
-                    "executionTime": int((time.time() - start) * 1000),
-                    "featureCount": 0,
-                    "timestamp": __import__("datetime")
-                    .datetime.now(__import__("datetime").timezone.utc)
-                    .isoformat(),
-                },
-            }
-        ), 400
+        error_resp = ErrorResponse(
+            toolId=tool_id,
+            error=str(exc),
+            metadata=ExecutionMetadata(
+                executionTime=int((time.time() - start) * 1000),
+                featureCount=0,
+                timestamp=datetime.now(UTC).isoformat(),
+            ),
+        )
+        return jsonify(error_resp.model_dump()), 400
 
     resp = build_response(
         tool=tool,
         outputs=outputs,
-        input_count=len(data.get("features", [])),
-        options=options,
-        source_dataset_ids=source_dataset_ids,
+        input_count=len(req.data.get("features", [])),
+        options=req.options,
+        source_dataset_ids=req.sourceDatasetIds,
         start_time=start,
+        warnings=warnings or None,
     )
-    return jsonify(resp)
+    return jsonify(resp.model_dump())

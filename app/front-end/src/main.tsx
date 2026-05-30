@@ -1,7 +1,3 @@
-// Polyfill Node.js globals for Kepler.gl
-import process from 'process';
-(window as any).process = process;
-
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { Provider } from 'react-redux'
@@ -10,8 +6,10 @@ import { ColorProvider } from './contexts/color-context.tsx'
 import { loadProject } from './services/persistence-service'
 import { loadProjectData } from './stores/data-slice'
 import './index.css'
-// SPDX-License-Identifier: MIT
-// Copyright contributors to the kepler.gl project
+
+if (import.meta.env.DEV) {
+  (window as Window & { __REDUX_STORE__?: typeof store }).__REDUX_STORE__ = store;
+}
 
 // Load saved data on startup
 const savedData = loadProject();

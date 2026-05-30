@@ -1,11 +1,15 @@
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 import geopandas as gpd
 from shapely.geometry import mapping, shape
 
+from app.models import ExecuteResponse, ExecutionMetadata, RunMeta, RunSummary
+from app.tools.base import BaseTool
 
-def geojson_to_gdf(data: dict) -> gpd.GeoDataFrame:
+
+def geojson_to_gdf(data: dict[str, Any]) -> gpd.GeoDataFrame:
     """Convert a GeoJSON FeatureCollection dict to a GeoDataFrame with CRS=4326."""
     features = data.get("features", [])
     if not features:
@@ -13,7 +17,7 @@ def geojson_to_gdf(data: dict) -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
 
 
-def gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict:
+def gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict[str, Any]:
     """Convert a GeoDataFrame to a GeoJSON FeatureCollection dict."""
     if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
@@ -32,16 +36,22 @@ def gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
-def _serialize(val):
-    """Make a value JSON-serializable."""
+def _serialize(val: Any) -> Any:
+    """Make a value JSON-serializable (handles nested dicts/lists)."""
     if hasattr(val, "item"):
-        return val.item()
+        val = val.item()
+    if isinstance(val, float) and (val != val or val == float("inf") or val == float("-inf")):
+        return None
     if isinstance(val, (datetime,)):
         return val.isoformat()
+    if isinstance(val, dict):
+        return {k: _serialize(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [_serialize(v) for v in val]
     return val
 
 
-def compute_bbox(outputs: list[dict]) -> list[float] | None:
+def compute_bbox(outputs: list[dict[str, Any]]) -> list[float] | None:
     """Compute [minX, minY, maxX, maxY] from a list of FeatureCollection dicts."""
     all_coords = []
     for fc in outputs:
@@ -61,40 +71,40 @@ def compute_bbox(outputs: list[dict]) -> list[float] | None:
 
 
 def build_response(
-    tool,
-    outputs: list[dict],
+    tool: BaseTool,
+    outputs: list[dict[str, Any]],
     input_count: int,
-    options: dict,
+    options: dict[str, Any],
     source_dataset_ids: list[str],
     start_time: float,
     warnings: list[str] | None = None,
-) -> dict:
-    """Build the standard AnalysisResult response dict."""
+) -> ExecuteResponse:
+    """Build the standard AnalysisResult response."""
     execution_time = int((time.time() - start_time) * 1000)
     now = datetime.now(UTC)
     output_count = sum(len(fc.get("features", [])) for fc in outputs)
     bbox = compute_bbox(outputs)
 
-    return {
-        "success": True,
-        "toolId": tool.id,
-        "outputs": outputs,
-        "metadata": {
-            "executionTime": execution_time,
-            "featureCount": output_count,
-            "timestamp": now.isoformat(),
-        },
-        "runMeta": {
-            "toolName": tool.name,
-            "toolVersion": tool.version,
-            "runAt": int(now.timestamp() * 1000),
-            "sourceDatasetIds": source_dataset_ids,
-            "params": options,
-            "summary": {
-                "inputCount": input_count,
-                "outputCount": output_count,
-                "bbox": bbox,
-            },
-            "warnings": warnings or [],
-        },
-    }
+    return ExecuteResponse(
+        success=True,
+        toolId=tool.id,
+        outputs=outputs,
+        metadata=ExecutionMetadata(
+            executionTime=execution_time,
+            featureCount=output_count,
+            timestamp=now.isoformat(),
+        ),
+        runMeta=RunMeta(
+            toolName=tool.name,
+            toolVersion=tool.version,
+            runAt=int(now.timestamp() * 1000),
+            sourceDatasetIds=source_dataset_ids,
+            params=options,
+            summary=RunSummary(
+                inputCount=input_count,
+                outputCount=output_count,
+                bbox=bbox,
+            ),
+            warnings=warnings or [],
+        ),
+    )

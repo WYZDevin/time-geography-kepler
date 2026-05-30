@@ -28,6 +28,7 @@ export interface SettingsState {
     backendUrl: string;
     backendAvailable: boolean;
     backendTools: BackendToolInfo[];
+
 }
 
 const initialState: SettingsState = {
@@ -38,7 +39,7 @@ const initialState: SettingsState = {
     maxDatasetSizeMB: 10,
     debugMode: false,
     showPerformanceMetrics: false,
-    backendUrl: (import.meta.env.VITE_BACKEND_URL as string) || 'http://localhost:8000',
+    backendUrl: (import.meta.env.VITE_BACKEND_URL as string) || '/api',
     backendAvailable: false,
     backendTools: [],
 };

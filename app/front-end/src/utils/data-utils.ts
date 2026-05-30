@@ -2,7 +2,7 @@ import { FeatureCollection } from '../interfaces/data-interfaces';
 
 /**
  * Safely extract field names from GeoJSON FeatureCollection
- * This avoids issues with Kepler.gl's processGeojson function
+ * This avoids issues with data processing
  */
 export const extractFieldNames = (geoJsonData: FeatureCollection): string[] => {
     if (!geoJsonData || !geoJsonData.features || geoJsonData.features.length === 0) {
@@ -41,10 +41,10 @@ export const extractFieldNames = (geoJsonData: FeatureCollection): string[] => {
 };
 
 /**
- * Create a Kepler.gl compatible dataset from GeoJSON
- * This safely prepares the data for Kepler.gl consumption
+ * Create a visualization-compatible dataset from GeoJSON
+ * This safely prepares the data for visualization
  */
-export const prepareDataForKepler = (geoJsonData: FeatureCollection, datasetName: string = 'analysis-data') => {
+export const prepareDataForVisualization = (geoJsonData: FeatureCollection, datasetName: string = 'analysis-data') => {
     try {
         // Create a deep copy to avoid modifying the original data
         const dataCopy = JSON.parse(JSON.stringify(geoJsonData));
@@ -57,7 +57,7 @@ export const prepareDataForKepler = (geoJsonData: FeatureCollection, datasetName
             data: dataCopy
         };
     } catch (error) {
-        console.error('Error preparing data for Kepler:', error);
+        console.error('Error preparing data for visualization:', error);
         return null;
     }
 };

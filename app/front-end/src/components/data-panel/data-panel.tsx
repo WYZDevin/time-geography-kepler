@@ -5,15 +5,13 @@ import type { AppDispatch } from '../../stores/store';
 import {
   selectAllDataSources,
   selectSelectedDataSourceIds,
-  removeDataSource,
   selectDataSource,
   deselectDataSource,
   clearSelection,
   clearAll,
   loadProjectData
 } from '../../stores/data-slice';
-import { uploadData, uploadDataFromFile } from '../../stores/data-thunks';
-import { FeatureCollection } from '../../interfaces/data-interfaces';
+import { uploadDataFromFile, removeDataSourceWithCleanup } from '../../stores/data-thunks';
 import {
   saveProject,
   exportProject,
@@ -115,7 +113,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
 
   const handleRemove = (dataSourceId: string) => {
     if (confirm('Are you sure you want to remove this data source?')) {
-      dispatch(removeDataSource(dataSourceId));
+      dispatch(removeDataSourceWithCleanup(dataSourceId) as any);
     }
   };
 
@@ -181,72 +179,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
     },
     multiple: false,
   });
-
-  const handleGenerateSample = async () => {
-    setUploadState({ status: 'uploading', message: 'Generating sample data...' });
-
-    try {
-      // Create synthetic data
-      const syntheticData: FeatureCollection = {
-        type: 'FeatureCollection',
-        features: []
-      };
-
-      const baseTime = new Date('2024-01-01T00:00:00Z').getTime();
-      const bounds = {
-        minLat: 37.7049,
-        maxLat: 37.8049,
-        minLng: -122.5149,
-        maxLng: -122.3849,
-      };
-
-      for (let i = 0; i < 100; i++) {
-        const lat = bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat);
-        const lng = bounds.minLng + Math.random() * (bounds.maxLng - bounds.minLng);
-        const time = new Date(baseTime + i * 60000).toISOString();
-
-        syntheticData.features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [lng, lat, Math.random() * 100],
-          },
-          properties: {
-            id: i,
-            timestamp: time,
-            user_id: `user_${Math.floor(i / 10)}`,
-            activity: ['walking', 'driving', 'stationary'][Math.floor(Math.random() * 3)],
-            speed: Math.random() * 50,
-          },
-        });
-      }
-
-      // Upload using Redux thunk
-      const result = await dispatch(uploadData({
-        name: 'Sample Trajectory Data',
-        data: syntheticData
-      })).unwrap();
-
-      setUploadState({
-        status: 'success',
-        message: 'Sample data generated successfully',
-        dataSourceId: result.id
-      });
-
-      // Auto-hide upload section after successful upload
-      setTimeout(() => {
-        setShowUploadSection(false);
-        setUploadState({ status: 'idle' });
-      }, 2000);
-
-    } catch (error) {
-      console.error('Sample data generation error:', error);
-      setUploadState({
-        status: 'error',
-        message: 'Failed to generate sample data'
-      });
-    }
-  };
 
   const getUploadStatusIcon = () => {
     switch (uploadState.status) {
@@ -514,19 +446,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
                   </div>
                 </div>
 
-                {/* Generate Sample Data */}
-                <div className="mt-3 pt-3 border-t">
-                  <Button
-                    onClick={handleGenerateSample}
-                    disabled={uploadState.status === 'uploading'}
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                  >
-                    <Plus className="w-3 h-3 mr-1" />
-                    Generate Sample Data
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           </div>
@@ -714,7 +633,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
                 size="sm"
                 onClick={() => {
                   if (confirm(`Delete ${selectedIds.length} selected data sources?`)) {
-                    selectedIds.forEach(id => dispatch(removeDataSource(id)));
+                    selectedIds.forEach(id => dispatch(removeDataSourceWithCleanup(id) as any));
                   }
                 }}
               >
@@ -776,24 +695,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
               </div>
             </Button>
 
-            <Button
-              variant="outline"
-              className="w-full justify-start h-auto py-4"
-              onClick={() => {
-                setShowUploadOptionsDialog(false);
-                handleGenerateSample();
-              }}
-            >
-              <div className="flex items-start gap-3">
-                <Plus className="w-5 h-5 mt-0.5" />
-                <div className="text-left">
-                  <div className="font-semibold">Generate Sample Data</div>
-                  <div className="text-sm text-muted-foreground">
-                    Create synthetic trajectory data for testing
-                  </div>
-                </div>
-              </div>
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

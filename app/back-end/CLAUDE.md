@@ -1,6 +1,6 @@
 # AI Coding Instructions (Backend): Tool Execution API
 
-You are contributing to the **backend exclusively**. This backend is a stateless Flask API serving geospatial analysis tools (Space-Time Kernel Density, Time Geography, Buffer, Union, Intersection) to a React frontend. The primary processing library is `geopandas`.
+You are contributing to the **backend exclusively**. This backend is a stateless Flask API serving geospatial analysis tools (Space-Time Kernel Density, Time Geography, Space-Time Cube, Space-Time Prism, Buffer, Union, Intersection) to a React frontend. The primary processing library is `geopandas`.
 
 Your job is to strictly adhere to the API contract dictated by the frontend `ToolRunMeta` and `ExecutionPolicy` specifications.
 
@@ -19,7 +19,7 @@ Requires **Python ≥ 3.12**. Uses **uv** as the package manager.
 
 - **Language:** Python
 - **Framework:** Flask (app factory in `app/__init__.py` → `create_app()`)
-- **Data Transport:** JSON / GeoJSON (in MVP). You MUST warn the user about binary formats (Parquet/Arrow) for large datasets, but implement the GeoJSON structure first to guarantee backward compatibility with `kepler.gl` in the frontend.
+- **Data Transport:** JSON / GeoJSON (in MVP). You MUST warn the user about binary formats (Parquet/Arrow) for large datasets, but implement the GeoJSON structure first to guarantee backward compatibility with the frontend map visualization.
 - **State:** Stateless. **Do not use a database.** Take the request, execute in `pandas`/`geopandas`, return the GeoJSON.
 
 ## 3) The Core Payload Contracts
@@ -27,7 +27,7 @@ Requires **Python ≥ 3.12**. Uses **uv** as the package manager.
 All tools must respond via `POST /api/v1/tools/<tool_id>/execute`.
 
 ### Standard Response Structure
-Regardless of the tool , your JSON response **MUST** follow this exact `ToolRunMeta` layout or the frontend Kepler instance will crash:
+Regardless of the tool , your JSON response **MUST** follow this exact `ToolRunMeta` layout or the frontend map visualization will crash:
 
 ```json
 {
@@ -169,6 +169,7 @@ class BaseTool(ABC):
 | `app/tools/buffer.py` | `buffer` | hybrid |
 | `app/tools/union.py` | `union` | hybrid |
 | `app/tools/intersection.py` | `intersection` | hybrid |
+| `app/tools/space_time_prism.py` | `space-time-prism` | hybrid |
 
 ### Adding a new tool
 

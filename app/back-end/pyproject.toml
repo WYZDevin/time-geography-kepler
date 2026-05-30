@@ -11,6 +11,8 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.12",
     "pyproj>=3.6",
+    "pydantic>=2.0",
+    "h3>=3.7",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +34,21 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 
+[tool.pylint.main]
+# Only enforce file-length; all other pylint checks are handled by ruff.
+disable = "all"
+enable = ["C0302"]   # too-many-lines
+
+[tool.pylint.design]
+max-module-lines = 600
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pylint>=4.0.5",
+    "pytest>=9.0.2",
+    "requests>=2.33.1",
+]

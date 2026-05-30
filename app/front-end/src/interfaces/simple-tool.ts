@@ -74,7 +74,7 @@ export interface ToolMetadata {
 export interface ToolOptionSchema {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'select' | 'dataset';
+  type: 'string' | 'number' | 'boolean' | 'select' | 'dataset' | 'field';
   required?: boolean;
   defaultValue?: unknown;
   
@@ -84,6 +84,8 @@ export interface ToolOptionSchema {
   step?: number;             // for number type
   options?: SelectOption[];  // for select type
   placeholder?: string;      // for string type
+  description?: string;      // helper text shown below the label
+  sourceDatasetOptionKey?: string; // for 'field' type: read columns from options[key+'Data'] instead of primary dataset
 }
 
 export interface SelectOption {

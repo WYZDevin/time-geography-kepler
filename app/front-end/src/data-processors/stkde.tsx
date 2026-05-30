@@ -1,4 +1,4 @@
-import { PROCESSED_HEIGHT_FIELD } from '@/utils/constants';
+import { PROCESSED_HEIGHT_FIELD, PROCESSED_TIME_FIELD } from '@/utils/constants';
 import { ToolUtils } from '@/tools/tool-utils';
 import * as tf from '@tensorflow/tfjs';
 import * as turf from '@turf/turf';
@@ -11,6 +11,9 @@ export interface STKDEResult {
   y_centers: number[];
   time_values: Date[];
   cell_size: number;
+  // True when per-user time alignment was applied (time measured as elapsed from
+  // each user's own start). When true, time_values represent elapsed time.
+  align: boolean;
 }
 
 /**
@@ -32,7 +35,8 @@ export async function tf_stkde(
   spatial_bandwidth?: number,
   temporal_bandwidth?: number,
   cell_size?: number,
-  n_time_slices: number = 10
+  n_time_slices: number = 10,
+  opts?: { userField?: string; align?: boolean }
 ): Promise<STKDEResult> {
 
   // Limit grid size to prevent WebGL issues
@@ -61,8 +65,32 @@ export async function tf_stkde(
   }
   // Determine the minimum timestamp.
   const t_min_val = Math.min(...rawTimes);
-  // Convert raw times into seconds offset from the minimum time.
-  const time_vals: number[] = rawTimes.map(t => (t - t_min_val) / 1000);
+
+  // Optional per-user time alignment ("normalize time"): measure each event as
+  // elapsed time from its own user's first observation so users tracked over
+  // different date ranges overlap on a shared elapsed timeline. Only active when
+  // a user field is provided and more than one distinct user is present.
+  const userField = opts?.userField;
+  const userStart = new Map<string, number>();
+  const users: string[] = [];
+  let align = false;
+  if (opts?.align && userField) {
+    for (const feat of features) {
+      users.push(String(feat.properties?.[userField] ?? 'unknown'));
+    }
+    for (let i = 0; i < n; i++) {
+      const u = users[i];
+      const cur = userStart.get(u);
+      if (cur === undefined || rawTimes[i] < cur) userStart.set(u, rawTimes[i]);
+    }
+    align = userStart.size > 1;
+  }
+
+  // Convert raw times into seconds offset: from each user's own start when
+  // aligning, otherwise from the global minimum time.
+  const time_vals: number[] = align
+    ? rawTimes.map((t, i) => (t - (userStart.get(users[i]) as number)) / 1000)
+    : rawTimes.map(t => (t - t_min_val) / 1000);
 
   // --- Convert Data to Tensors ---
   const tfX = tf.tensor1d(x_vals);
@@ -244,10 +272,13 @@ export async function tf_stkde(
   const density: number[][][] | number[][] = (n_time_slices > 1)
     ? densityTimeSlices
     : densityTimeSlices[0];
-  // Convert time slice centers back to Date objects.
-  const time_values: Date[] = time_centers.map(tc => new Date(t_min_val + tc * 1000));
+  // Convert time slice centers back to Date objects. When aligning, the centers
+  // are elapsed seconds, so the resulting Date.getTime() equals elapsed ms.
+  const time_values: Date[] = align
+    ? time_centers.map(tc => new Date(tc * 1000))
+    : time_centers.map(tc => new Date(t_min_val + tc * 1000));
 
-  return { density, x_centers, y_centers, time_values, cell_size };
+  return { density, x_centers, y_centers, time_values, cell_size, align };
 }
 
 /* --- TensorFlow.js Helper Functions --- */
@@ -513,7 +544,8 @@ export function createClassificationGeoJSON(
   Y: number[][],
   classificationSlices: number[][][],
   cellSize: number,
-  timeNums: number[]
+  timeNums: number[],
+  align: boolean = false
 ): FeatureCollection[] {
   const timeSliceCount = classificationSlices.length;
   const { sideLength, cellHeight } = computeSideLengthAndHeight(X, Y);
@@ -559,6 +591,9 @@ export function createClassificationGeoJSON(
             time_slice_index: t,
             time_value: timeValueIso,
             [PROCESSED_HEIGHT_FIELD]: cellHeight,
+            [PROCESSED_TIME_FIELD]: timeSliceCount > 1 ? t / (timeSliceCount - 1) : 0,
+            _timestamp: timeValueMs,
+            ...(align ? { _elapsed_ms: timeValueMs } : {}),
             side_length: sideLength
           }
         };
@@ -595,11 +630,12 @@ export async function createSTKDE(
   spatial_bandwidth?: number,
   temporal_bandwidth?: number,
   cell_size?: number,
-  n_time_slices: number = 24
+  n_time_slices: number = 24,
+  opts?: { userField?: string; align?: boolean }
 ): Promise<{ features: GeoJSON.FeatureCollection[]; timeNums: number[] }> {
   try {
     // 1. Compute the STKDE result.
-    const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices);
+    const stkdeResult = await tf_stkde(gdf, timeCol, spatial_bandwidth, temporal_bandwidth, cell_size, n_time_slices, opts);
 
     // 2. Convert the density output to a tf.Tensor3D.
     let densityTensor: tf.Tensor3D;
@@ -629,7 +665,8 @@ export async function createSTKDE(
       classificationResults.Y,
       classificationResults.classificationSlicesArrays,
       stkdeResult.cell_size,
-      classificationResults.time_nums
+      classificationResults.time_nums,
+      stkdeResult.align
     );
 
     // Clean up the density tensor

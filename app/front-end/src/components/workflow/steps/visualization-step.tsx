@@ -3,13 +3,17 @@ import { useAppDispatch, useAppSelector } from '../../../stores/store';
 import { Button } from '@/components/ui/button';
 import { resetWorkflow, setCurrentStep, addToHistory } from '../../../stores/workflow-slice';
 import { AnalysisResult, createAnalysisEngine } from '../../../services/analysis-engine';
-import { KeplerAdapter } from '../../kepler-adapter';
+import { DeckAdapter } from '../../deck-adapter';
 import { toolRegistry } from '@/utils/tool-registry';
+import { exportViewAsGeoJSON, exportMultipleDatasetsAsGeoJSON } from '../../../services/export-service';
+import { Download } from 'lucide-react';
+import { getLargeFile } from '../../../services/large-file-cache';
 
 const VisualizationStep = () => {
     const dispatch = useAppDispatch();
     const { selectedToolId, selectedData, fieldMapping, toolOptions, executionMode } = useAppSelector(state => state.workflow);
     const { sideLength, heightScale } = useAppSelector(state => state.metadata);
+    const dataSourcesById = useAppSelector(state => state.data.dataSources);
     const selectedTool = selectedToolId ? toolRegistry.getTool(selectedToolId) : null;
     const analysisEngine = useMemo(() => createAnalysisEngine(), []);
     const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
@@ -17,11 +21,11 @@ const VisualizationStep = () => {
     const [showErrorDetails, setShowErrorDetails] = useState(false);
     const hasRunAnalysis = useRef(false);
 
-    const keplerState = useAppSelector((state: any) => state.keplerGl.kepler);
+    const deckDatasets = useAppSelector(state => state.map.datasets);
+    const selectedAnchors = useAppSelector(state => state.map.selectedAnchors);
     const hasExistingData = useMemo(() => {
-        if (!keplerState?.visState?.datasets) return false;
-        return Object.keys(keplerState.visState.datasets).length > 0;
-    }, [keplerState]);
+        return Object.keys(deckDatasets).length > 0;
+    }, [deckDatasets]);
 
     const [mapActionChoice, setMapActionChoice] = useState<'none' | 'pending' | 'overwrite' | 'append'>('none');
 
@@ -39,11 +43,35 @@ const VisualizationStep = () => {
         setIsAnalyzing(true);
 
         try {
+            const isInteractivePrism =
+                selectedToolId === 'space-time-prism' &&
+                toolOptions.analysisMode === 'interactive';
+
+            // Inject selected anchors only for the explanatory clicked-anchor prism.
+            const effectiveOptions: Record<string, unknown> = { ...toolOptions, sideLength, heightScale };
+            if (isInteractivePrism && selectedAnchors.length >= 2) {
+                effectiveOptions._anchorA = selectedAnchors[0];
+                effectiveOptions._anchorB = selectedAnchors[1];
+            }
+
+            // Space-Time Cube env join needs the environment dataset's features.
+            // Large files live in large-file-cache (resolved inside the engine);
+            // small files live only in Redux, so hand their data to the engine.
+            if (selectedToolId === 'space-time-cube' && effectiveOptions.envDataset) {
+                const envId = effectiveOptions.envDataset as string;
+                if (!getLargeFile(envId)) {
+                    const envData = dataSourcesById[envId]?.data;
+                    if (envData?.features?.length) {
+                        effectiveOptions.envDatasetData = envData;
+                    }
+                }
+            }
+
             const request = {
                 toolId: selectedToolId,
                 data: selectedData,
                 attributes: fieldMapping || undefined,
-                options: { ...toolOptions, sideLength, heightScale },
+                options: effectiveOptions,
                 mode: executionMode || 'frontend',
             };
 
@@ -82,13 +110,42 @@ const VisualizationStep = () => {
         } finally {
             setIsAnalyzing(false);
         }
-    }, [selectedData, selectedToolId, fieldMapping, toolOptions, sideLength, heightScale, analysisEngine, dispatch, hasExistingData]);
+    }, [selectedData, selectedToolId, fieldMapping, toolOptions, sideLength, heightScale, analysisEngine, dispatch, hasExistingData, selectedAnchors, dataSourcesById]);
+
+    // For individual prism mode: wait for 2 anchor selections before running.
+    // PASTA mode is schedule-based and should run immediately.
+    const isPrismTool = selectedToolId === 'space-time-prism';
+    const isInteractivePrism = isPrismTool && toolOptions.analysisMode === 'interactive';
+    const prismReady = !isInteractivePrism || selectedAnchors.length >= 2;
+
+    // Reset hasRunAnalysis when anchors change so prism can re-run
+    const anchorCount = selectedAnchors.length;
+    useEffect(() => {
+        if (isInteractivePrism && anchorCount >= 2) {
+            hasRunAnalysis.current = false;
+            setAnalysisResult(null);
+            setMapActionChoice('none');
+        }
+    }, [isInteractivePrism, anchorCount]);
 
     useEffect(() => {
-        if (selectedData && selectedToolId && !hasRunAnalysis.current) {
+        if (selectedData && selectedToolId && !hasRunAnalysis.current && prismReady) {
             runAnalysis();
         }
-    }, [selectedData, selectedToolId, runAnalysis]);
+    }, [selectedData, selectedToolId, runAnalysis, prismReady]);
+
+    const handleExportGeoJSON = () => {
+        if (!analysisResult?.success || analysisResult.outputs.length === 0) {
+            return;
+        }
+        const date = new Date().toISOString().slice(0, 10);
+        const filename = `${analysisResult.toolId}-results-${date}.geojson`;
+        if (analysisResult.outputs.length === 1) {
+            exportViewAsGeoJSON(analysisResult.outputs[0], filename);
+        } else {
+            exportMultipleDatasetsAsGeoJSON(analysisResult.outputs, filename);
+        }
+    };
 
     const handleNewAnalysis = () => {
         hasRunAnalysis.current = false;
@@ -160,6 +217,32 @@ const VisualizationStep = () => {
                 </div>
             </div>
 
+            {/* Prism tool: waiting for anchor selection */}
+            {isInteractivePrism && !prismReady && (
+                <div className="mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center">
+                    <h4 className="font-bold text-gray-900 text-xl mb-2">
+                        Select Two Points on the Map
+                    </h4>
+                    <p className="text-gray-700 mb-4 text-base">
+                        Click on two locations (e.g., stay points from a 3D Trajectory analysis) to define the prism anchors.
+                    </p>
+                    <div className="flex justify-center gap-6 text-sm">
+                        <div className="flex items-center gap-2">
+                            <span className={`w-6 h-6 rounded-full ${selectedAnchors.length >= 1 ? 'bg-red-500' : 'bg-gray-300'} text-white text-xs flex items-center justify-center font-bold`}>A</span>
+                            <span className={selectedAnchors.length >= 1 ? 'text-green-700 font-medium' : 'text-gray-500'}>
+                                {selectedAnchors.length >= 1 ? selectedAnchors[0].label : 'Not selected'}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className={`w-6 h-6 rounded-full ${selectedAnchors.length >= 2 ? 'bg-blue-500' : 'bg-gray-300'} text-white text-xs flex items-center justify-center font-bold`}>B</span>
+                            <span className={selectedAnchors.length >= 2 ? 'text-green-700 font-medium' : 'text-gray-500'}>
+                                {selectedAnchors.length >= 2 ? selectedAnchors[1].label : 'Not selected'}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 flex-1">
                 <h3 className="font-semibold text-gray-800 mb-4">Analysis Configuration</h3>
 
@@ -183,11 +266,13 @@ const VisualizationStep = () => {
                     <div className="mb-4">
                         <h4 className="font-medium text-gray-700 mb-2">Tool Options</h4>
                         <div className="space-y-2">
-                            {Object.entries(toolOptions).map(([key, value]) => (
+                            {Object.entries(toolOptions)
+                                .filter(([key, value]) => !key.endsWith('Data') && value !== null && typeof value !== 'object')
+                                .map(([key, value]) => (
                                 <div key={key} className="flex justify-between text-sm">
                                     <span className="text-gray-600 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
                                     <span className="font-medium">
-                                        {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value.toString()}
+                                        {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
                                     </span>
                                 </div>
                             ))}
@@ -227,11 +312,22 @@ const VisualizationStep = () => {
                     <div className="mb-4">
                         <h4 className="font-medium text-gray-700 mb-2">Analysis Results</h4>
                         <div className="bg-gradient-to-r from-green-50 to-blue-50 p-4 rounded-lg border border-green-200">
-                            <div className="flex items-center mb-2">
-                                <span className="text-lg mr-2">✅</span>
-                                <span className="font-medium text-green-800">
-                                    Analysis completed successfully
-                                </span>
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center">
+                                    <span className="text-lg mr-2">✅</span>
+                                    <span className="font-medium text-green-800">
+                                        Analysis completed successfully
+                                    </span>
+                                </div>
+                                <Button
+                                    onClick={handleExportGeoJSON}
+                                    variant="outline"
+                                    size="sm"
+                                    className="border-green-300 text-green-700 hover:bg-green-100 flex items-center gap-1"
+                                >
+                                    <Download className="w-4 h-4" />
+                                    Export as GeoJSON
+                                </Button>
                             </div>
                             <p className="text-green-700 text-sm">
                                 Generated {analysisResult.outputs.length} output dataset(s) with {analysisResult.metadata.featureCount} total features.
@@ -397,9 +493,9 @@ const VisualizationStep = () => {
                 )}
             </div>
 
-            {/* Kepler Adapter handles visualization separately from analysis logic */}
+            {/* DeckAdapter handles visualization separately from analysis logic */}
             {(mapActionChoice === 'append' || mapActionChoice === 'overwrite') && (
-                <KeplerAdapter
+                <DeckAdapter
                     result={analysisResult}
                     appendMode={mapActionChoice === 'append'}
                     onVisualizationComplete={() => { }}

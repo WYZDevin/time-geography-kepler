@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 from shapely.geometry import Polygon
 
+from typing import Any
+
+from app.models import AttributeMapping, STKDEOptions
 from ..constants import PROCESSED_HEIGHT_FIELD
 from .base import BaseTool
 
@@ -77,8 +80,22 @@ class STKDETool(BaseTool):
     def execution_policy(self) -> str:
         return "backend_only"
 
-    def execute(self, gdf, options, attributes):
-        time_field = attributes.get("time")
+    def execute(
+        self,
+        gdf: gpd.GeoDataFrame,
+        options: dict[str, Any],
+        attributes: dict[str, Any],
+    ) -> list[gpd.GeoDataFrame]:
+        """Compute STKDE density surfaces as 3D Z-stacked polygons.
+
+        gdf columns:
+            geometry     : Point            required
+            <time_field> : str | numeric    required; column named by attributes["time"];
+                                            parsed as Unix-ms integer
+        """
+        opts = STKDEOptions.model_validate(options)
+        attr = AttributeMapping.model_validate(attributes)
+        time_field = attr.time
         if not time_field or time_field not in gdf.columns:
             raise ValueError(f"Time attribute '{time_field}' not found in data")
 
@@ -92,15 +109,17 @@ class STKDETool(BaseTool):
         x = pts.geometry.x.values.astype(np.float64)
         y = pts.geometry.y.values.astype(np.float64)
         times = pd.to_datetime(pts[time_field])
-        t_epoch_ms = (times.astype(np.int64) // 10**6).values  # milliseconds
+        if hasattr(times.dt, "tz") and times.dt.tz is not None:
+            times = times.dt.tz_localize(None)
+        t_epoch_ms = times.astype("datetime64[ms]").astype(np.int64).values
         t_min_ms = int(t_epoch_ms.min())
         t_seconds = ((t_epoch_ms - t_min_ms) / 1000.0).astype(np.float64)
 
         # ----------------------------------------------------------------
         # Bandwidth estimation (frontend-matching robust estimators)
         # ----------------------------------------------------------------
-        h_spatial = options.get("spatialBandwidth") or _robust_spatial_bandwidth(x, y)
-        h_temporal = options.get("temporalBandwidth") or _robust_temporal_bandwidth(t_seconds)
+        h_spatial = opts.spatialBandwidth or _robust_spatial_bandwidth(x, y)
+        h_temporal = opts.temporalBandwidth or _robust_temporal_bandwidth(t_seconds)
         if h_spatial <= 0:
             h_spatial = 1e-9
         if h_temporal <= 0:
@@ -141,7 +160,7 @@ class STKDETool(BaseTool):
         # ----------------------------------------------------------------
         # Time slices (default 10, matching frontend n_time_slices)
         # ----------------------------------------------------------------
-        n_time_slices = int(options.get("nTimeSlices", 10))
+        n_time_slices = opts.nTimeSlices
         if n_time_slices <= 1:
             time_centers = np.array([float(np.mean(t_seconds))])
             n_time_slices = 1

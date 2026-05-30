@@ -3,16 +3,15 @@ def test_list_tools(client):
     assert resp.status_code == 200
     data = resp.get_json()
     tools = data["tools"]
-    assert len(tools) == 6
+    # Active tool set after redundant-tool cleanup
+    assert len(tools) == 4
 
     ids = {t["id"] for t in tools}
     assert ids == {
-        "buffer-analysis",
-        "intersection-analysis",
-        "union-analysis",
         "time-geography",
         "stkde",
         "space-time-cube",
+        "space-time-prism",
     }
 
     for t in tools:

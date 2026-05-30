@@ -10,13 +10,17 @@ export interface AxesContext {
   bounds: { minLng: number; maxLng: number; minLat: number; maxLat: number };
   timestamps: number[];
   totalAltitude: number;
+  // Per-user elapsed times (ms from each user's own start). Present only when
+  // the 3D Trajectory tool runs with "Align User Start Times" enabled; when set,
+  // the Z-axis is labeled as elapsed time (Day 1…Day n) instead of absolute dates.
+  elapsedMs?: number[];
 }
 
 export interface AxesOptions {
   timeBreaks?: 'auto' | '1h' | '4h' | '12h' | '24h';
 }
 
-// Fixed dataset IDs — Kepler replaces rather than duplicates on each run
+// Fixed dataset IDs — deck.gl replaces rather than duplicates on each run
 const SHARED_AXES_ID = 'shared-axes';
 const SHARED_AXES_LABELS_ID = 'shared-axes-labels';
 
@@ -32,6 +36,7 @@ export function extractAxesContext(outputs: FeatureCollection[]): AxesContext | 
   let minLng = Infinity, maxLng = -Infinity;
   let minLat = Infinity, maxLat = -Infinity;
   const timestamps: number[] = [];
+  const elapsedValues: number[] = [];
   let maxZ = 0;
 
   for (const fc of outputs) {
@@ -45,6 +50,10 @@ export function extractAxesContext(outputs: FeatureCollection[]): AxesContext | 
         coordsList.push(geom.coordinates);
       } else if (geom.type === 'LineString') {
         coordsList.push(...geom.coordinates);
+      } else if (geom.type === 'MultiLineString') {
+        for (const line of geom.coordinates) {
+          coordsList.push(...line);
+        }
       } else if (geom.type === 'Polygon') {
         for (const ring of geom.coordinates) {
           coordsList.push(...ring);
@@ -76,6 +85,12 @@ export function extractAxesContext(outputs: FeatureCollection[]): AxesContext | 
         timestamps.push(ts);
       }
 
+      // Collect per-user elapsed times (only set when user-time alignment is on)
+      const el = f.properties?._elapsed_ms;
+      if (typeof el === 'number') {
+        elapsedValues.push(el);
+      }
+
       // Check _height property for STKDE-style outputs
       const h = f.properties?.[PROCESSED_HEIGHT_FIELD];
       if (typeof h === 'number') {
@@ -99,6 +114,7 @@ export function extractAxesContext(outputs: FeatureCollection[]): AxesContext | 
     bounds: { minLng, maxLng, minLat, maxLat },
     timestamps,
     totalAltitude,
+    elapsedMs: elapsedValues,
   };
 }
 
@@ -156,8 +172,46 @@ export function createSharedAxes(
     }
   ];
 
-  // Time labels along Z-axis
-  if (timestamps.length > 0) {
+  // Time labels along Z-axis.
+  // Elapsed-time mode (per-user alignment): label as "Day 1…Day n" relative to
+  // each user's own start instead of absolute dates.
+  const elapsedMs = context.elapsedMs ?? [];
+  const maxElapsed = elapsedMs.length > 0 ? Math.max(...elapsedMs) : 0;
+
+  if (maxElapsed > 0) {
+    const tickLengthX = lineLenX * 0.05;
+    const tickLengthY = lineLenY * 0.05;
+    let lastLabel: string | null = null;
+    for (const e of computeElapsedBreaks(maxElapsed)) {
+      const label = formatElapsed(e);
+      if (label === lastLabel) continue; // avoid duplicate adjacent day labels
+      lastLabel = label;
+      const labelAlt = totalAltitude * (e / maxElapsed);
+
+      axesLines.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: [[minLng, minLat, labelAlt], [minLng + tickLengthX, minLat, labelAlt]] },
+        properties: { axis_type: 'z_tick', label: '' }
+      });
+      axesLines.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: [[minLng, minLat, labelAlt], [minLng, minLat + tickLengthY, labelAlt]] },
+        properties: { axis_type: 'z_tick', label: '' }
+      });
+      axesLabels.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [minLng, minLat, labelAlt] },
+        properties: { axis_type: 'label', axis_label_text: label }
+      });
+    }
+
+    // Z-axis title at top
+    axesLabels.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [minLng, minLat, totalAltitude + (totalAltitude * 0.05)] },
+      properties: { axis_type: 'label', axis_label_text: 'Z (Elapsed)' }
+    });
+  } else if (timestamps.length > 0) {
     const minTime = Math.min(...timestamps);
     const maxTime = Math.max(...timestamps);
     const timeSpan = maxTime - minTime;
@@ -270,6 +324,36 @@ export function createSharedAxes(
       }))
     }
   };
+}
+
+// ========================================
+// Elapsed-time helpers (per-user alignment)
+// ========================================
+
+const DAY_MS = 86_400_000;
+
+// Tick positions (in elapsed ms) for the elapsed-time Z-axis: one per day when
+// the span covers at least a day, otherwise start / middle / end.
+function computeElapsedBreaks(maxElapsed: number): number[] {
+  if (maxElapsed <= 0) return [0];
+  if (maxElapsed >= DAY_MS) {
+    const breaks: number[] = [];
+    // Cap at a reasonable number of daily ticks to avoid label clutter.
+    const step = Math.max(1, Math.ceil(maxElapsed / DAY_MS / 12)) * DAY_MS;
+    for (let t = 0; t <= maxElapsed; t += step) breaks.push(t);
+    if (breaks[breaks.length - 1] !== maxElapsed) breaks.push(maxElapsed);
+    return breaks;
+  }
+  return [0, maxElapsed / 2, maxElapsed];
+}
+
+function formatElapsed(elapsedMs: number): string {
+  if (elapsedMs === 0 || elapsedMs >= DAY_MS) {
+    return `Day ${Math.floor(elapsedMs / DAY_MS) + 1}`;
+  }
+  const hours = elapsedMs / 3600_000;
+  if (hours >= 1) return `+${Math.round(hours)}h`;
+  return `+${Math.round(elapsedMs / 60_000)}m`;
 }
 
 // ========================================

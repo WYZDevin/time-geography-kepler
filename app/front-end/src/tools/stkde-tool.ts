@@ -48,6 +48,20 @@ export class STKDETool implements SimpleTool {
           { label: 'Every 12 Hours', value: '12h' },
           { label: 'Every 24 Hours', value: '24h' }
         ]
+      },
+      {
+        key: 'userIdField',
+        type: 'field',
+        label: 'User ID Column',
+        description: 'Optional. Column identifying each user. Required to enable "Align User Start Times".',
+        defaultValue: ''
+      },
+      {
+        key: 'alignUserTime',
+        type: 'boolean',
+        label: 'Align User Start Times (Normalize Time)',
+        description: 'When a User ID column is set and multiple users exist, measure each event as time elapsed from that user\'s own first observation, so users tracked over different date ranges are overlaid on a shared elapsed-time (Day 1…Day n) Z-axis.',
+        defaultValue: false
       }
     ];
   }
@@ -94,6 +108,9 @@ export class STKDETool implements SimpleTool {
     try {
       progress.report(30, 'Computing space-time kernel density...');
 
+      const userIdField = (options.userIdField as string || '').trim();
+      const alignUserTime = options.alignUserTime === true;
+
       // Call createSTKDE which handles computation, classification, and GeoJSON conversion
       const { features: results } = await createSTKDE(
         data as GeoJSON.FeatureCollection<GeoJSON.Point>,
@@ -101,7 +118,8 @@ export class STKDETool implements SimpleTool {
         undefined, // spatial_bandwidth - auto-determined
         undefined, // temporal_bandwidth - auto-determined
         undefined, // cell_size - auto-determined
-        10         // n_time_slices
+        10,        // n_time_slices
+        { userField: userIdField, align: alignUserTime }
       );
 
       const enrichedResults = results.map((collection, index) => {

@@ -1,14 +1,15 @@
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { FeatureCollection } from '@/interfaces/data-interfaces';
 import { ToolUtils } from '@/tools/tool-utils';
-import { DataSource, addDataSource } from './data-slice';
+import { DataSource, addDataSource, removeDataSource } from './data-slice';
+import { setLargeFile, deleteLargeFile } from '@/services/large-file-cache';
 
 /**
  * Upload new data source
  */
 export const uploadData = createAsyncThunk<
   DataSource,
-  { name: string; data: FeatureCollection }
+  { name: string; data: FeatureCollection; bounds?: DataSource['bounds'] }
 >(
   'data/upload',
   async (params, { dispatch }) => {
@@ -17,8 +18,8 @@ export const uploadData = createAsyncThunk<
       throw new Error('Invalid GeoJSON data');
     }
 
-    // Calculate bounds
-    const bounds = ToolUtils.getBounds(params.data.features) || undefined;
+    // Caller may supply pre-computed bounds (or skip them for large datasets)
+    const bounds = params.bounds ?? (ToolUtils.getBounds(params.data.features) || undefined);
 
     // Create data source
     const dataSource: DataSource = {
@@ -72,6 +73,11 @@ export const saveAnalysisResult = createAsyncThunk(
   }
 );
 
+// Large-file threshold: above this we skip getBounds and pre-freeze the data
+// to avoid O(N) work during Redux/immer processing.
+const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024; // 50 MB
+const MAX_FILE_SIZE = 500 * 1024 * 1024;        // 500 MB hard cap
+
 /**
  * Upload data from file
  */
@@ -81,62 +87,90 @@ export const uploadDataFromFile = createAsyncThunk<
 >(
   'data/uploadFile',
   async (file, { dispatch }) => {
-    // File size limit: 10MB
-    const MAX_FILE_SIZE = 10 * 1024 * 1024;
-
     if (file.size > MAX_FILE_SIZE) {
-      throw new Error(`File too large: ${(file.size / 1024 / 1024).toFixed(2)}MB. Maximum size is 10MB.`);
+      throw new Error(
+        `File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024} MB.`
+      );
     }
 
-    // Check file extension
     const fileName = file.name.toLowerCase();
     if (!fileName.endsWith('.json') && !fileName.endsWith('.geojson')) {
       throw new Error('Invalid file type. Please upload a .json or .geojson file.');
     }
 
-    // Read file content
     let text: string;
     try {
       text = await file.text();
-    } catch (error) {
+    } catch {
       throw new Error('Failed to read file. The file may be corrupted.');
     }
 
-    // Validate JSON structure
-    if (!text.trim()) {
-      throw new Error('File is empty.');
-    }
+    if (!text.trim()) throw new Error('File is empty.');
 
     let data: FeatureCollection;
     try {
       data = JSON.parse(text);
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Invalid JSON format: ${errMsg}. Please check that your file contains valid JSON.`);
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Invalid JSON format: ${msg}`);
     }
 
-    // Validate GeoJSON structure
-    if (!data || typeof data !== 'object') {
-      throw new Error('Invalid data structure. Expected a GeoJSON object.');
+    if (!data || data.type !== 'FeatureCollection') {
+      throw new Error(`Expected a GeoJSON FeatureCollection, got "${(data as any)?.type ?? typeof data}".`);
+    }
+    if (!Array.isArray(data.features) || data.features.length === 0) {
+      throw new Error('GeoJSON FeatureCollection is empty.');
     }
 
-    if (data.type !== 'FeatureCollection') {
-      throw new Error(`Invalid GeoJSON type: "${data.type}". Expected "FeatureCollection".`);
+    const isLarge = file.size > LARGE_FILE_THRESHOLD;
+
+    // Pre-extract field names before any mutation/freezing.
+    const fieldNames = data.features.length > 0
+      ? Object.keys(data.features[0].properties ?? {})
+      : [];
+
+    if (isLarge) {
+      // Store the real data in the module-level cache; Redux holds only a
+      // lightweight stub so immer never has to walk 1 M+ features.
+      const id = ToolUtils.generateId('data');
+      setLargeFile(id, data);
+
+      const stub: FeatureCollection = { type: 'FeatureCollection', features: [] };
+      const bounds = undefined; // skip for large env files
+
+      const dataSource: DataSource = {
+        id,
+        name: file.name.replace(/\.[^/.]+$/, ''),
+        data: stub,
+        fieldNames,
+        createdAt: new Date().toISOString(),
+        featureCount: data.features.length,
+        bounds,
+      };
+      dispatch(addDataSource(dataSource));
+      return dataSource;
     }
 
-    if (!Array.isArray(data.features)) {
-      throw new Error('Invalid GeoJSON: Missing or invalid "features" array.');
-    }
-
-    if (data.features.length === 0) {
-      throw new Error('GeoJSON FeatureCollection is empty (0 features). Please upload a file with data.');
-    }
+    // Small file: normal path — full data in Redux.
+    const bounds = ToolUtils.getBounds(data.features) || undefined;
 
     const result = await dispatch(uploadData({
-      name: file.name.replace(/\.[^/.]+$/, ''), // Remove file extension
-      data
+      name: file.name.replace(/\.[^/.]+$/, ''),
+      data,
+      bounds,
     }));
 
     return result.payload as DataSource;
+  }
+);
+
+/**
+ * Remove a data source and evict any cached large-file data.
+ */
+export const removeDataSourceWithCleanup = createAsyncThunk<void, string>(
+  'data/removeWithCleanup',
+  async (id, { dispatch }) => {
+    deleteLargeFile(id);
+    dispatch(removeDataSource(id));
   }
 );
