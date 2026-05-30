@@ -1,6 +1,5 @@
 services:
   backend:
-    build: app/back-end
     image: yongzwu/time-geography-backend:latest
     ports:
       - "8000:8000"
@@ -13,12 +12,6 @@ services:
       start_period: 15s
 
   frontend:
-    build:
-      context: app/front-end
-      args:
-        # Baked into the bundle at build time. Override via shell env or a .env
-        # file next to this compose file, then rebuild.
-        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8000}
     image: yongzwu/time-geography-frontend:latest
     ports:
       - "5173:80"
