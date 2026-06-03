@@ -42,15 +42,12 @@ export const persistenceMiddleware: Middleware = (store) => (next) => (action) =
 
     // Schedule save
     saveTimeout = setTimeout(() => {
-      try {
-        const state = store.getState();
-        const { dataSources, selectedIds } = state.data;
-        saveProject(dataSources, selectedIds);
-        console.log('[Persistence] Auto-saved project data');
-      } catch (error) {
-        console.error('[Persistence] Failed to auto-save:', error);
-        // Don't throw - auto-save failures shouldn't break the app
-      }
+      const state = store.getState();
+      const { dataSources, selectedIds } = state.data;
+      // saveProject is async (IndexedDB); never let a rejection break the app.
+      saveProject(dataSources, selectedIds)
+        .then(() => console.log('[Persistence] Auto-saved project data'))
+        .catch((error) => console.error('[Persistence] Failed to auto-save:', error));
     }, SAVE_DEBOUNCE_MS);
   }
 

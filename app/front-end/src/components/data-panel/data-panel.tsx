@@ -82,7 +82,12 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
   const [expandedSources, setExpandedSources] = useState<Set<string>>(new Set());
   const [uploadState, setUploadState] = useState<UploadState>({ status: 'idle' });
   const [showUploadSection, setShowUploadSection] = useState(false);
-  const [storageInfo, setStorageInfo] = useState<StorageInfo>(getStorageInfo());
+  const [storageInfo, setStorageInfo] = useState<StorageInfo>({
+    usedBytes: 0,
+    usedMB: 0,
+    percentUsed: 0,
+    itemCount: 0,
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('date');
   const [showCSVDialog, setShowCSVDialog] = useState(false);
@@ -90,7 +95,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
 
   // Update storage info when data changes
   useEffect(() => {
-    setStorageInfo(getStorageInfo());
+    getStorageInfo().then(setStorageInfo).catch(() => { /* ignore */ });
   }, [dataSources]);
 
   // Filter and sort data sources
@@ -207,15 +212,15 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
   };
 
   // Persistence handlers
-  const handleSaveProject = () => {
+  const handleSaveProject = async () => {
     try {
       const dataSourcesObj = dataSources.reduce((acc, ds) => {
         acc[ds.id] = ds;
         return acc;
       }, {} as Record<string, typeof dataSources[0]>);
-      saveProject(dataSourcesObj, selectedIds);
+      await saveProject(dataSourcesObj, selectedIds);
       alert('Project saved successfully!');
-      setStorageInfo(getStorageInfo());
+      setStorageInfo(await getStorageInfo());
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to save project');
     }
@@ -241,26 +246,26 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
         selectedIds: projectData.selectedIds,
       }));
       alert(`Project imported successfully! Loaded ${Object.keys(projectData.dataSources).length} data sources.`);
-      setStorageInfo(getStorageInfo());
+      setStorageInfo(await getStorageInfo());
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Failed to import project');
     }
   };
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (dataSources.length === 0) {
       alert('No data to clear');
       return;
     }
 
     const confirmed = confirm(
-      `Are you sure you want to clear all ${dataSources.length} data sources?\n\nThis will also clear saved data from localStorage.`
+      `Are you sure you want to clear all ${dataSources.length} data sources?\n\nThis will also clear saved data from storage.`
     );
 
     if (confirmed) {
       dispatch(clearAll());
-      clearProject();
-      setStorageInfo(getStorageInfo());
+      await clearProject();
+      setStorageInfo(await getStorageInfo());
       alert('All data cleared successfully!');
     }
   };
@@ -705,7 +710,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
           onClose={() => setShowCSVDialog(false)}
           onSuccess={(_dataSourceId) => {
             setShowCSVDialog(false);
-            setStorageInfo(getStorageInfo());
+            getStorageInfo().then(setStorageInfo).catch(() => { /* ignore */ });
           }}
         />
       )}

@@ -364,6 +364,22 @@ export function buildDescriptorForDataset(
     };
   }
 
+  // --- 2D ground projection of the trajectory (flat line on the map plane) ---
+  // The dataset's points carry _processed_height = 0 and Z = 0, so the same
+  // segment builder yields flat segments at ground level.
+  if (dsType === 'time-geography-trajectory-2d') {
+    return {
+      id: `${datasetId}-layer-${ts}`,
+      type: 'line',
+      datasetId,
+      label: '2D Trajectory',
+      isVisible: true,
+      opacity: 0.9,
+      color: COLORS.LINE as [number, number, number],
+      config: { segmentData: buildLineSegments(dataset), widthScale: 2 },
+    };
+  }
+
   // --- STKDE density (3D extruded polygons per confidence level) ---
   if (dsType.startsWith('stkde-density-')) {
     const levelIndex = parseInt(dsType.split('-')[2] || '1', 10) - 1;

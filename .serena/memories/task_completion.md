@@ -1,1 +1,1 @@
-Before delivering changes, ensure TypeScript build passes via `npm run build` or at minimum `npm run lint` for static checks. Verify kepler tool workflows in UI when relevant.
+Before delivering changes, ensure TypeScript build passes via `npm run build` or at minimum `npm run lint` for static checks. Verify tool workflows and map visualization in UI when relevant.

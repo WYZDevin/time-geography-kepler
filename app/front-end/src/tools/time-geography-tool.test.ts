@@ -40,6 +40,7 @@ describe('TimeGeographyTool', () => {
     expect(keys).toContain('showAxes');
     expect(keys).toContain('timeBreaks');
     expect(keys).toContain('timeWindow');
+    expect(keys).toContain('show2D');
   });
 
   it('produces trajectory output from point data', async () => {
@@ -79,6 +80,35 @@ describe('TimeGeographyTool', () => {
       expect(features[i].properties!._height).toBeGreaterThanOrEqual(
         features[i - 1].properties!._height
       );
+    }
+  });
+
+  it('does not produce a 2D ground path by default', async () => {
+    const data = makeTrajectory(5);
+    const results = await tool.analyze(data, {}, { time: 'timestamp' });
+    expect(
+      results.some(r => r.features[0]?.properties?._dataset_type === 'time-geography-trajectory-2d'),
+    ).toBe(false);
+  });
+
+  it('produces a flat 2D ground path when show2D is enabled', async () => {
+    const data = makeTrajectory(5);
+    const results = await tool.analyze(data, { show2D: true }, { time: 'timestamp' });
+
+    const ground = results.find(
+      r => r.features[0]?.properties?._dataset_type === 'time-geography-trajectory-2d',
+    );
+    expect(ground).toBeDefined();
+    expect(ground!.features).toHaveLength(5);
+
+    // The 3D path still exists and is unchanged (output 0)
+    expect(results[0].features[0]?.properties?._dataset_type).toBe('time-geography-trajectory');
+
+    // Every ground-path point is flattened to Z = 0 (geometry + _height)
+    for (const feature of ground!.features) {
+      const coords = (feature.geometry as { coordinates: number[] }).coordinates;
+      expect(coords[2]).toBe(0);
+      expect(feature.properties?._height).toBe(0);
     }
   });
 

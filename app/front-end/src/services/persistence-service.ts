@@ -1,19 +1,25 @@
 /**
- * Local Storage Persistence Service
- * Simple, dumb serialization - no over-engineering
+ * Project persistence service (IndexedDB-backed).
+ *
+ * Datasets are multi-MB GeoJSON, which overflows the browser's ~5 MB
+ * localStorage quota. IndexedDB has a far larger quota (typically hundreds of
+ * MB) and stores structured objects directly, so we use it as the source of
+ * truth. The public API is async; callers await it.
  */
 
 import { DataSource } from '../stores/data-slice';
 
-// Storage keys
+// Keys (shared between the IndexedDB store and the legacy localStorage layer
+// we migrate away from).
 const STORAGE_KEY_PREFIX = 'time-geography-kepler';
 const DATA_SOURCES_KEY = `${STORAGE_KEY_PREFIX}:data-sources`;
 const SELECTED_IDS_KEY = `${STORAGE_KEY_PREFIX}:selected-ids`;
 const VERSION_KEY = `${STORAGE_KEY_PREFIX}:version`;
 const CURRENT_VERSION = '1.0.0';
 
-// Storage limits (localStorage typically has 5-10MB limit)
-const MAX_STORAGE_SIZE = 5 * 1024 * 1024; // 5MB warning threshold
+// Fallback quota used only for the storage-usage indicator when the browser
+// does not expose navigator.storage.estimate().
+const FALLBACK_QUOTA = 50 * 1024 * 1024;
 
 export interface ProjectData {
   version: string;
@@ -29,66 +35,141 @@ export interface StorageInfo {
   itemCount: number;
 }
 
+// ---------------------------------------------------------------------------
+// Minimal IndexedDB key/value wrapper (single object store)
+// ---------------------------------------------------------------------------
+
+const DB_NAME = STORAGE_KEY_PREFIX;
+const STORE_NAME = 'kv';
+const DB_VERSION = 1;
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+function openDB(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(key);
+    req.onsuccess = () => resolve(req.result as T | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSetMany(entries: Array<[string, unknown]>): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    for (const [key, value] of entries) store.put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+async function idbDelete(keys: string[]): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    for (const key of keys) store.delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
 /**
- * Save project data to localStorage
+ * One-time migration of any project saved by the old localStorage layer into
+ * IndexedDB, then clear the localStorage copies so they stop consuming the
+ * 5 MB bucket. No-op once migrated.
  */
-export const saveProject = (
+async function migrateFromLocalStorage(): Promise<void> {
+  let legacy: string | null;
+  try {
+    legacy = localStorage.getItem(DATA_SOURCES_KEY);
+  } catch {
+    return; // localStorage unavailable (private mode etc.) — nothing to migrate
+  }
+  if (!legacy) return;
+
+  try {
+    const alreadyMigrated = await idbGet(DATA_SOURCES_KEY);
+    if (alreadyMigrated == null) {
+      const dataSources = JSON.parse(legacy) as Record<string, DataSource>;
+      const selectedIdsRaw = localStorage.getItem(SELECTED_IDS_KEY);
+      const selectedIds = selectedIdsRaw ? (JSON.parse(selectedIdsRaw) as string[]) : [];
+      await idbSetMany([
+        [DATA_SOURCES_KEY, dataSources],
+        [SELECTED_IDS_KEY, selectedIds],
+        [VERSION_KEY, CURRENT_VERSION],
+      ]);
+      console.log('[Persistence] Migrated project from localStorage to IndexedDB');
+    }
+    localStorage.removeItem(DATA_SOURCES_KEY);
+    localStorage.removeItem(SELECTED_IDS_KEY);
+    localStorage.removeItem(VERSION_KEY);
+  } catch (error) {
+    console.warn('[Persistence] localStorage→IndexedDB migration skipped:', error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Save project data to IndexedDB. Datasets are stored as structured objects in
+ * a single transaction (atomic), with no size cap beyond the browser quota.
+ */
+export const saveProject = async (
   dataSources: Record<string, DataSource>,
   selectedIds: string[]
-): void => {
+): Promise<void> => {
   try {
-    const projectData: ProjectData = {
-      version: CURRENT_VERSION,
-      dataSources,
-      selectedIds,
-      savedAt: new Date().toISOString(),
-    };
-
-    // Serialize
-    const serialized = JSON.stringify(projectData);
-
-    // Check size before saving
-    const sizeBytes = new Blob([serialized]).size;
-    if (sizeBytes > MAX_STORAGE_SIZE) {
-      throw new Error(
-        `Project size (${(sizeBytes / 1024 / 1024).toFixed(2)}MB) exceeds recommended limit of ${MAX_STORAGE_SIZE / 1024 / 1024}MB. Consider removing some datasets.`
-      );
-    }
-
-    // Save individual components for easier access
-    localStorage.setItem(DATA_SOURCES_KEY, JSON.stringify(dataSources));
-    localStorage.setItem(SELECTED_IDS_KEY, JSON.stringify(selectedIds));
-    localStorage.setItem(VERSION_KEY, CURRENT_VERSION);
-
+    await idbSetMany([
+      [DATA_SOURCES_KEY, dataSources],
+      [SELECTED_IDS_KEY, selectedIds],
+      [VERSION_KEY, CURRENT_VERSION],
+    ]);
   } catch (error) {
-    if (error instanceof Error) {
-      if (error.name === 'QuotaExceededError') {
-        throw new Error('Storage quota exceeded. Please clear some data sources.');
-      }
-      throw error;
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      throw new Error('Storage quota exceeded. Please remove some data sources.');
     }
-    throw new Error('Failed to save project');
+    throw error instanceof Error ? error : new Error('Failed to save project');
   }
 };
 
 /**
- * Load project data from localStorage
+ * Load saved project data from IndexedDB (migrating from localStorage first).
  */
-export const loadProject = (): ProjectData | null => {
+export const loadProject = async (): Promise<ProjectData | null> => {
   try {
-    const dataSourcesJson = localStorage.getItem(DATA_SOURCES_KEY);
-    const selectedIdsJson = localStorage.getItem(SELECTED_IDS_KEY);
-    const version = localStorage.getItem(VERSION_KEY);
+    await migrateFromLocalStorage();
 
-    if (!dataSourcesJson) {
-      return null; // No saved data
-    }
+    const dataSources = await idbGet<Record<string, DataSource>>(DATA_SOURCES_KEY);
+    if (!dataSources) return null;
 
-    const dataSources = JSON.parse(dataSourcesJson) as Record<string, DataSource>;
-    const selectedIds = selectedIdsJson ? JSON.parse(selectedIdsJson) as string[] : [];
+    const selectedIds = (await idbGet<string[]>(SELECTED_IDS_KEY)) ?? [];
+    const version = (await idbGet<string>(VERSION_KEY)) ?? CURRENT_VERSION;
 
     return {
-      version: version || '1.0.0',
+      version,
       dataSources,
       selectedIds,
       savedAt: new Date().toISOString(),
@@ -100,13 +181,11 @@ export const loadProject = (): ProjectData | null => {
 };
 
 /**
- * Clear all saved project data
+ * Clear all saved project data.
  */
-export const clearProject = (): void => {
+export const clearProject = async (): Promise<void> => {
   try {
-    localStorage.removeItem(DATA_SOURCES_KEY);
-    localStorage.removeItem(SELECTED_IDS_KEY);
-    localStorage.removeItem(VERSION_KEY);
+    await idbDelete([DATA_SOURCES_KEY, SELECTED_IDS_KEY, VERSION_KEY]);
   } catch (error) {
     console.error('Failed to clear project:', error);
     throw new Error('Failed to clear saved data');
@@ -114,53 +193,47 @@ export const clearProject = (): void => {
 };
 
 /**
- * Get storage usage information
+ * Get storage usage information for the saved datasets.
  */
-export const getStorageInfo = (): StorageInfo => {
+export const getStorageInfo = async (): Promise<StorageInfo> => {
   try {
-    let totalBytes = 0;
-    let itemCount = 0;
+    const dataSources = await idbGet<Record<string, DataSource>>(DATA_SOURCES_KEY);
+    const usedBytes = dataSources ? new Blob([JSON.stringify(dataSources)]).size : 0;
+    const itemCount = dataSources ? Object.keys(dataSources).length : 0;
 
-    // Calculate size of our keys only
-    const keys = [DATA_SOURCES_KEY, SELECTED_IDS_KEY, VERSION_KEY];
-
-    for (const key of keys) {
-      const value = localStorage.getItem(key);
-      if (value) {
-        totalBytes += new Blob([key, value]).size;
-        itemCount++;
-      }
+    let quota = FALLBACK_QUOTA;
+    try {
+      const estimate = await navigator.storage?.estimate?.();
+      if (estimate?.quota) quota = estimate.quota;
+    } catch {
+      /* estimate() unsupported — keep fallback */
     }
 
-    const totalMB = totalBytes / 1024 / 1024;
-    const percentUsed = (totalBytes / MAX_STORAGE_SIZE) * 100;
+    const usedMB = usedBytes / 1024 / 1024;
+    const percentUsed = quota > 0 ? (usedBytes / quota) * 100 : 0;
 
     return {
-      usedBytes: totalBytes,
-      usedMB: parseFloat(totalMB.toFixed(2)),
+      usedBytes,
+      usedMB: parseFloat(usedMB.toFixed(2)),
       percentUsed: parseFloat(percentUsed.toFixed(1)),
       itemCount,
     };
   } catch (error) {
     console.error('Failed to get storage info:', error);
-    return {
-      usedBytes: 0,
-      usedMB: 0,
-      percentUsed: 0,
-      itemCount: 0,
-    };
+    return { usedBytes: 0, usedMB: 0, percentUsed: 0, itemCount: 0 };
   }
 };
 
 /**
- * Check if there is saved data available
+ * Check whether there is saved data available.
  */
-export const hasSavedData = (): boolean => {
-  return localStorage.getItem(DATA_SOURCES_KEY) !== null;
+export const hasSavedData = async (): Promise<boolean> => {
+  return (await idbGet(DATA_SOURCES_KEY)) != null;
 };
 
 /**
- * Export project data as JSON file
+ * Export project data as a downloadable JSON file. Operates on the in-memory
+ * state passed in, so it stays synchronous.
  */
 export const exportProject = (
   dataSources: Record<string, DataSource>,
@@ -186,7 +259,7 @@ export const exportProject = (
 };
 
 /**
- * Import project data from JSON file
+ * Import project data from a JSON file.
  */
 export const importProject = (file: File): Promise<ProjectData> => {
   return new Promise((resolve, reject) => {
@@ -197,14 +270,13 @@ export const importProject = (file: File): Promise<ProjectData> => {
         const json = e.target?.result as string;
         const projectData = JSON.parse(json) as ProjectData;
 
-        // Validate structure
         if (!projectData.dataSources || !projectData.version) {
           reject(new Error('Invalid project file format'));
           return;
         }
 
         resolve(projectData);
-      } catch (error) {
+      } catch {
         reject(new Error('Failed to parse project file'));
       }
     };

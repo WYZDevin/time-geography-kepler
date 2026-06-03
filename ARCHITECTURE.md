@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the system architecture, data flow, and key design decisions for the Time Geography Kepler platform.
+This document describes the system architecture, data flow, and key design decisions for the Time Geography platform.
 
 ## System Overview
 
@@ -9,8 +9,8 @@ This document describes the system architecture, data flow, and key design decis
 │                    Browser (React)                      │
 │                                                         │
 │  ┌──────────┐   ┌────────────────┐   ┌──────────────┐  │
-│  │ Tool     │──>│ Analysis       │──>│ Kepler.gl    │  │
-│  │ Picker   │   │ Engine         │   │ Map          │  │
+│  │ Tool     │──>│ Analysis       │──>│ deck.gl +    │  │
+│  │ Picker   │   │ Engine         │   │ maplibre Map │  │
 │  └──────────┘   └───────┬────────┘   └──────────────┘  │
 │                   ┌─────┴──────┐                        │
 │                   │            │                        │
@@ -36,7 +36,7 @@ The platform is a **monorepo with two independent codebases** that share no code
 
 | Component | Path | Stack | Role |
 |-----------|------|-------|------|
-| Frontend | `app/front-end/` | React 18, TypeScript, Vite, Redux, Kepler.gl, Turf.js | UI, browser-side computation, visualization |
+| Frontend | `app/front-end/` | React 18, TypeScript, Vite, Redux, deck.gl 9, react-map-gl 7, maplibre-gl 4, Turf.js | UI, browser-side computation, visualization |
 | Backend | `app/back-end/` | Flask 3, Python 3.12, geopandas, scipy | Server-side computation for heavy tools |
 
 The **API contract** is the only boundary between them. Both sides can compute tool results; the execution policy determines which side runs.
@@ -81,6 +81,7 @@ Key rule: if both sides have an implementation, the effective policy becomes `hy
 | 3D Trajectory | `time-geography` | `frontend_only` | Up to 100k points |
 | STKDE | `stkde` | `frontend_only` | Grid capped at 50×50 |
 | Space-Time Cube | `space-time-cube` | `backend_only` | Heavy computation, Python-only |
+| Space-Time Prism | `space-time-prism` | `hybrid` | Compute space-time prisms for movement constraints |
 
 ---
 
@@ -120,7 +121,7 @@ AnalysisEngine
       ← { success, outputs, metadata, runMeta }
   → normalizeBackendResponse(raw, toolId)
       → field remapping (_processed_height → _height, etc.)
-      → Kepler.gl layer config injection
+      → deck.gl layer config injection
   → returns AnalysisResult
 ```
 
@@ -139,7 +140,7 @@ POST /api/v1/tools/{toolId}/execute
 ```
 AnalysisResult.outputs (FeatureCollection[])
   → each feature has _dataset_type and _layer_config properties
-  → Kepler.gl receives datasets + layer configs
+  → deck.gl receives datasets + layer configs
   → renders 2D/3D map layers
 ```
 
@@ -155,21 +156,22 @@ The backend returns raw GeoJSON with its own property names. The frontend normal
 
 | Backend field | Frontend field | Used by |
 |---------------|---------------|---------|
-| `_processed_height` | `_height` | Z-axis extrusion in Kepler.gl 3D layers |
+| `_processed_height` | `_height` | Z-axis extrusion in deck.gl 3D layers |
 | `_processed_time` | `_time_order` | Time ordering for trajectory rendering |
 | `_processed_neighbors` | `_neighbors` | Line layer neighbor connections |
 
 ### Layer config injection
 
-The backend doesn't embed Kepler.gl layer configurations. The normalizer creates them per tool:
+The backend doesn't embed deck.gl layer configurations. The normalizer creates them per tool:
 
 | Tool | Layer type | Config factory |
 |------|-----------|----------------|
-| `time-geography` (trajectory) | `line` (3D, neighbors mode) | `createTrajectoryLayerConfig()` |
-| `time-geography` (stay points) | `point` (sized by duration) | `createStayPointsLayerConfig()` |
-| `stkde` | `geojson` (3D extruded polygons) | `createStkdeLayerConfig()` — per confidence level |
-| `space-time-cube` | `geojson` (3D extruded polygons) | `createSpaceTimeCubeLayerConfig()` |
-| buffer/union/intersection | `geojson` (2D polygons) | `createGenericPolygonLayerConfig()` |
+| `time-geography` (trajectory) | `PathLayer` (3D) | `createTrajectoryLayerConfig()` |
+| `time-geography` (stay points) | `ScatterplotLayer` (sized by duration) | `createStayPointsLayerConfig()` |
+| `stkde` | `GeoJsonLayer` (3D extruded polygons) | `createStkdeLayerConfig()` — per confidence level |
+| `space-time-cube` | `GeoJsonLayer` (3D extruded polygons) | `createSpaceTimeCubeLayerConfig()` |
+| `space-time-prism` | `GeoJsonLayer` (3D extruded) | `createSpaceTimePrismLayerConfig()` |
+| buffer/union/intersection | `GeoJsonLayer` (2D polygons) | `createGenericPolygonLayerConfig()` |
 
 ---
 
@@ -287,9 +289,9 @@ time-geography-kepler/
 │   │   │   ├── interfaces/        # TypeScript types (SimpleTool, FeatureCollection)
 │   │   │   ├── services/          # Core services (analysis-engine, backend-api, normalizer, resolver)
 │   │   │   ├── stores/            # Redux slices (data, settings, workflow, progress)
-│   │   │   ├── tools/             # Tool implementations (6 tools)
+│   │   │   ├── tools/             # Tool implementations (7 tools)
 │   │   │   ├── utils/             # Constants, tool registry, data utilities
-│   │   │   └── visualization-templates/  # Kepler.gl layer config templates
+│   │   │   └── visualization-templates/  # deck.gl layer config templates
 │   │   ├── package.json
 │   │   └── vite.config.ts
 │   └── back-end/
@@ -298,7 +300,7 @@ time-geography-kepler/
 │       │   ├── routes.py          # API blueprint (/api/v1)
 │       │   ├── tool_registry.py   # Singleton registry
 │       │   ├── utils.py           # GeoJSON/GeoDataFrame converters
-│       │   └── tools/             # Tool implementations (6 tools)
+│       │   └── tools/             # Tool implementations (7 tools)
 │       ├── tests/                 # pytest test suite
 │       └── pyproject.toml
 ├── .github/workflows/ci.yml      # CI: lint + typecheck + test for both

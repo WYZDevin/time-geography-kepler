@@ -47,6 +47,13 @@ export class TimeGeographyTool implements SimpleTool {
         defaultValue: true
       },
       {
+        key: 'show2D',
+        label: 'Show 2D Ground Path',
+        description: 'Also draw the trajectory flattened onto the map plane (Z=0) — the route as seen from above.',
+        type: 'boolean',
+        defaultValue: false
+      },
+      {
         key: 'userIdField',
         label: 'User ID Column',
         description: 'Split the trajectory by this column — each user is drawn as its own distinctly-colored path',
@@ -214,25 +221,33 @@ export class TimeGeographyTool implements SimpleTool {
     }
 
     // Per-user time alignment: when enabled and there is more than one user,
-    // measure each point's elapsed time from its own user's first observation
-    // so every user starts at ground level (z=0). The Z-axis then represents
-    // elapsed time shared across users rather than absolute dates.
+    // shift each trajectory by a whole number of days so every user starts on
+    // the same date, while preserving the original clock time of each
+    // observation. Elapsed time is measured from the midnight of each user's
+    // first day, and the Z-axis spans the longest date range across all users.
     const align = !!userIdField && alignUserTime === true && userIndex.size > 1;
-    const userStart = new Map<string, number>();
+    const userStartDay = new Map<string, number>();
     let maxElapsed = 0;
     if (align) {
       for (const f of validFeatures) {
         const uid = f.properties!._user_id as string;
-        const t = f.properties!._timestamp as number;
-        const cur = userStart.get(uid);
-        if (cur === undefined || t < cur) userStart.set(uid, t);
+        const day = startOfDay(f.properties!._timestamp as number);
+        const cur = userStartDay.get(uid);
+        if (cur === undefined || day < cur) userStartDay.set(uid, day);
       }
       for (const f of validFeatures) {
         const uid = f.properties!._user_id as string;
-        const e = (f.properties!._timestamp as number) - (userStart.get(uid) as number);
+        const e = (f.properties!._timestamp as number) - (userStartDay.get(uid) as number);
         if (e > maxElapsed) maxElapsed = e;
       }
     }
+
+    // When aligning, the displayed/animated timeline is the normalized one:
+    // every trajectory is re-anchored to the midnight of the earliest day, so
+    // the time slider, time read-out and slice count all span the longest date
+    // range (~elapsed) instead of the raw calendar spread. Time-of-day is kept
+    // because the shift is a whole number of days.
+    const alignAnchor = align ? startOfDay(timeExtent[0]) : 0;
 
     const bounds = ToolUtils.getBounds(validFeatures);
     let TOTAL_HEIGHT_METERS = 1000;
@@ -245,7 +260,7 @@ export class TimeGeographyTool implements SimpleTool {
       let elapsedMs: number | undefined;
       if (align) {
         const uid = feature.properties!._user_id as string;
-        elapsedMs = (feature.properties!._timestamp as number) - (userStart.get(uid) as number);
+        elapsedMs = (feature.properties!._timestamp as number) - (userStartDay.get(uid) as number);
         timeProgress = maxElapsed > 0 ? elapsedMs / maxElapsed : 0;
       } else {
         timeProgress = timeRange > 0
@@ -284,7 +299,9 @@ export class TimeGeographyTool implements SimpleTool {
           [PROCESSED_HEIGHT_FIELD]: scaledHeight,
           [PROCESSED_NEIGHBORS_FIELD]: neighbors,
           ...(colorRgba ? { color_rgba: colorRgba } : {}),
-          ...(elapsedMs !== undefined ? { _elapsed_ms: elapsedMs } : {}),
+          ...(elapsedMs !== undefined
+            ? { _elapsed_ms: elapsedMs, _timestamp: alignAnchor + elapsedMs }
+            : {}),
           _time_progress: timeProgress,
           _sequence: index
         }
@@ -324,7 +341,30 @@ export class TimeGeographyTool implements SimpleTool {
     };
     results.push(trajectoryData);
 
-    // 2. Stay points if enabled
+    // 2. Optional flat 2D ground path — the same trajectory projected onto the
+    // map plane (Z=0), so the route can be read from above alongside the 3D
+    // space-time path. Reuses the per-user colors and animation order.
+    if (options.show2D) {
+      const groundData: FeatureCollection = {
+        ...preprocessedData,
+        features: preprocessedData.features.map(f => {
+          const [lng, lat] = (f.geometry as any).coordinates;
+          return {
+            ...f,
+            geometry: { ...f.geometry, coordinates: [lng, lat, 0] },
+            properties: {
+              ...f.properties,
+              [PROCESSED_HEIGHT_FIELD]: 0,
+              _dataset_type: 'time-geography-trajectory-2d',
+              _layer_config: this._create2DTrajectoryLayerConfig(latField, lngField),
+            },
+          };
+        }),
+      };
+      results.push(groundData);
+    }
+
+    // 3. Stay points if enabled
     if (options.visualizeStay) {
       const stayField = (options.stayField as string || '').trim();
       let stayPoints: FeatureCollection;
@@ -559,6 +599,32 @@ export class TimeGeographyTool implements SimpleTool {
     };
   }
 
+  private _create2DTrajectoryLayerConfig(latField: string, lngField: string): any {
+    const timestamp = Date.now();
+
+    return {
+      id: `time-geography-trajectory-2d-layer-${timestamp}`,
+      type: 'line',
+      config: {
+        dataId: 'time-geography-trajectory-2d',
+        label: '2D Trajectory',
+        columnMode: 'neighbors',
+        color: COLORS.LINE,
+        columns: {
+          lat: latField,
+          lng: lngField,
+          neighbors: PROCESSED_NEIGHBORS_FIELD
+        },
+        isVisible: true,
+        visConfig: {
+          opacity: 0.9,
+          thickness: 2,
+          enable3d: false
+        }
+      }
+    };
+  }
+
   private _createStayPointsLayerConfig(): any {
     const timestamp = Date.now();
 
@@ -592,6 +658,18 @@ export class TimeGeographyTool implements SimpleTool {
       }
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Floor a timestamp to the UTC midnight of its day. Per-user alignment shifts
+// trajectories by whole days using this, so each observation keeps its
+// original time-of-day while only its date changes.
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86_400_000;
+
+function startOfDay(ts: number): number {
+  return Math.floor(ts / DAY_MS) * DAY_MS;
 }
 
 // ---------------------------------------------------------------------------

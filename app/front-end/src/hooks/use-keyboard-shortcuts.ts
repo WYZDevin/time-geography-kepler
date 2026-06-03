@@ -22,8 +22,9 @@ export const useKeyboardShortcuts = () => {
             key: 's',
             ctrlOrMeta: true,
             handler: () => {
-                saveProject(dataSources, selectedIds);
-                console.log('Project saved via keyboard shortcut');
+                saveProject(dataSources, selectedIds)
+                    .then(() => console.log('Project saved via keyboard shortcut'))
+                    .catch((error) => console.error('Failed to save project:', error));
             },
             description: 'Save project'
         },

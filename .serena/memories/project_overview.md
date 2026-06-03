@@ -1,1 +1,1 @@
-Space-Time Analytics Platform: React + TypeScript frontend integrating kepler.gl for time geography visualization, workflow tooling, and spatial analysis. Pure client-side architecture with extensible analysis tool system (ToolManager) and Redux state management.
+Space-Time Analytics Platform: React + TypeScript frontend integrating deck.gl, react-map-gl, and maplibre-gl for time geography visualization, workflow tooling, and spatial analysis. Hybrid client/server architecture with extensible analysis tool system (ToolRegistry) and Redux state management.

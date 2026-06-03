@@ -67,7 +67,7 @@ export class <ToolClass> implements SimpleTool {
    - Add the import: `import { <ToolClass> } from './<tool-name>-tool';`
    - Add `new <ToolClass>()` to the `availableTools` array
 
-4. **Add normalizer case** in `app/front-end/src/services/backend-normalizer.ts` if the backend tool uses `_processed_*` fields or needs Kepler.gl layer config injection. If it's a simple polygon tool, the `normalizeGeneric()` fallback works — just add the tool ID to the `labels` map in `createGenericPolygonLayerConfig()` if needed.
+4. **Add normalizer case** in `app/front-end/src/services/backend-normalizer.ts` if the backend tool uses `_processed_*` fields or needs layer config injection. If it's a simple polygon tool, the `normalizeGeneric()` fallback works — just add the tool ID to the `labels` map in `createGenericPolygonLayerConfig()` if needed.
 
 5. **Verify the tool ID matches exactly** between `backend tool.id` and `frontend tool.id`. The execution resolver and backend API service use this ID to route execution.
 
@@ -164,4 +164,4 @@ After completing the sync:
 2. Remind the user to test:
    - Backend: `cd app/back-end && uv run pytest tests/`
    - Frontend: `cd app/front-end && npm run build`
-3. If a normalizer case was added, note that the user should verify the Kepler.gl visualization renders correctly
+3. If a normalizer case was added, note that the user should verify the deck.gl visualization renders correctly
