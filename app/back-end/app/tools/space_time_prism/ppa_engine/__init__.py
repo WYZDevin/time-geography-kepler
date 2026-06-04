@@ -27,6 +27,13 @@ from .profiles import ModeProfile, make_mode_profile
 from .snap import SnapResult, snap_origin_to_graph
 from .dijkstra import bounded_dijkstra, DijkstraWorkspace
 from .reachability import compute_origin_ppa, OriginPPAResult, PPAFeature
+from .two_anchor import (
+    compute_two_anchor_prism,
+    feasible_intervals,
+    PrismSegment,
+    shortest_path_sec,
+    TwoAnchorPrism,
+)
 
 __all__ = [
     "Graph",
@@ -42,6 +49,11 @@ __all__ = [
     "compute_origin_ppa",
     "OriginPPAResult",
     "PPAFeature",
+    "compute_two_anchor_prism",
+    "feasible_intervals",
+    "PrismSegment",
+    "shortest_path_sec",
+    "TwoAnchorPrism",
     "compute_padded_extent",
     "extent_area_km2",
     "is_extent_too_large",

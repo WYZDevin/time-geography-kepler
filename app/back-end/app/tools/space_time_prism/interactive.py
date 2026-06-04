@@ -231,13 +231,10 @@ def execute_anchor_prism(
 ) -> list[gpd.GeoDataFrame]:
     """Compute an explanatory prism from two UI-selected anchors on the backend.
 
-    gdf (optional) GPS trajectory used when prismMode="gps-road-network":
-        geometry     : Point            required if gdf provided
-        <time_field> : str | numeric    optional; column named by time_field;
-                                        used to filter and sort points between anchors
+    gdf (optional) GPS trajectory — only used to align the prism's Z scale with
+        the rendered trajectory height; the two-anchor network prism itself is
+        defined purely by the two picked anchors.
     """
-    from .gps_road_network import execute_gps_road_network_anchor_prism
-
     required = ("lng", "lat")
     if any(key not in anchor_a for key in required) or any(key not in anchor_b for key in required):
         raise ValueError("Interactive Space-Time Prism requires anchors with lng and lat")
@@ -336,11 +333,14 @@ def execute_anchor_prism(
     slice_height = total_height / num_slices
 
     if prism_mode == "gps-road-network":
-        # The PPA branch reads Z straight from each GPS point's coordinate
-        # (and from each anchor's `alt`), so it does not need the prism's
-        # total_height / t_min_all / t_range_all scale.
-        return execute_gps_road_network_anchor_prism(
-            p1, p2, options, gdf=gdf, time_field=time_field,
+        # Two-anchor network prism: forward Dijkstra from A + backward from B,
+        # intersected where travel(A→x) + travel(x→B) + activity ≤ T. The Z
+        # scale is passed through so slices line up with the trajectory height.
+        from .network_prism import execute_network_anchor_prism
+
+        return execute_network_anchor_prism(
+            p1, p2, options,
+            z_start=z_start, z_end=z_end, total_height=total_height,
         )
     elif prism_mode == "network":
         prism_rows, ppa_polys = _network_anchor_prism_rows(

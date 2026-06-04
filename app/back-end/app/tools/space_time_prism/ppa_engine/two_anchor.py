@@ -1,0 +1,441 @@
+"""Two-anchor network space-time prism.
+
+This generalises the single-origin symmetric model in ``reachability.py`` to the
+classic Hägerstrand prism defined by *two* anchor points A and B:
+
+    T     = t_B - t_A                       total time budget (sec)
+    A_min = minimum activity time (sec)
+    d_a(x) = shortest travel time from anchor A to x   (forward cone)
+    d_b(x) = shortest travel time from x to anchor B    (backward cone, undirected)
+
+A road point x belongs to the *potential path area* (PPA) when there is still
+time to perform the activity after travelling A -> x -> B::
+
+    d_a(x) + d_b(x) + A_min <= T          <=>     d_a(x) + d_b(x) <= K,  K = T - A_min
+
+and the activity time actually available at x is::
+
+    activity(x) = T - d_a(x) - d_b(x)      (>= A_min on the PPA)
+
+The 3-D prism is the stack of time slices. At an instant ``t`` (t_A <= t <= t_B)
+the occupiable set is the intersection of the two cones::
+
+    d_a(x) <= t - t_A      AND      d_b(x) <= t_B - t
+
+Both ``d_a`` and ``d_b`` are piecewise-linear along an edge (the lower envelope of
+the "from u", "from v" and — on the snapped edge — "from snap point" route lines,
+exactly as in ``reachability.py``). The feasible PPA region on an edge is therefore
+the set where the *sum* of the two envelopes stays below ``K``; we find it by
+walking the breakpoints of both envelopes and thresholding the linear sum on each
+piece.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+
+from .graph_build import Graph
+from .reachability import (
+    _clip_edge_to_wgs84,
+    _merge_intervals,
+    reachable_intervals_on_edge,
+)
+
+_EPS = 1e-9
+
+# Sentinel for "unreached" node distances in the vectorised path — large enough
+# to dominate any min() but finite, so numpy arithmetic never produces inf/nan.
+_SENTINEL = 1.0e15
+
+# A route line is (slope, intercept, domain_a, domain_b); its value at fraction s
+# is ``slope * s + intercept`` and it is only valid for domain_a <= s <= domain_b.
+RouteLine = tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class PrismSegment:
+    """One clipped reachable road piece, for the PPA or for a single time slice."""
+    edge_id: int
+    interval_a: float
+    interval_b: float
+    highway: Optional[str]
+    # Total travel time A->x->B over the interval (g = d_a + d_b).
+    travel_total_min: float
+    travel_total_max: float
+    # Activity time still available (T - g); >= A_min on the PPA.
+    activity_sec_min: float
+    activity_sec_mid: float
+    activity_sec_max: float
+    coords_wgs84: list[tuple[float, float]]
+
+
+def _cone_lines(
+    du: float, dv: float, c: float, is_snap_edge: bool, snap_fraction: float
+) -> list[RouteLine]:
+    """Route lines whose lower envelope is the travel time ``d(s)`` along an edge."""
+    lines: list[RouteLine] = []
+    if not math.isinf(du):
+        lines.append((c, du, 0.0, 1.0))           # du + c*s
+    if not math.isinf(dv):
+        lines.append((-c, dv + c, 0.0, 1.0))       # dv + c*(1-s)
+    if is_snap_edge:
+        f = snap_fraction
+        lines.append((-c, c * f, 0.0, f))          # c*(f - s) for s <= f
+        lines.append((c, -c * f, f, 1.0))          # c*(s - f) for s >= f
+    return lines
+
+
+def _envelope_at(s: float, lines: list[RouteLine]) -> float:
+    """Lower envelope value ``d(s)`` (min over the route lines valid at ``s``)."""
+    best = math.inf
+    for m, b, da, db in lines:
+        if da - _EPS <= s <= db + _EPS:
+            v = m * s + b
+            if v < best:
+                best = v
+    return best
+
+
+def _cone_breaks(lines: list[RouteLine]) -> set[float]:
+    """Fractions in [0, 1] where the lower envelope may switch active line."""
+    brks: set[float] = set()
+    for _, _, da, db in lines:
+        if 0.0 <= da <= 1.0:
+            brks.add(da)
+        if 0.0 <= db <= 1.0:
+            brks.add(db)
+    n = len(lines)
+    for i in range(n):
+        m1, b1, _, _ = lines[i]
+        for j in range(i + 1, n):
+            m2, b2, _, _ = lines[j]
+            if abs(m1 - m2) < 1e-12:
+                continue
+            s = (b2 - b1) / (m1 - m2)
+            if 0.0 <= s <= 1.0:
+                brks.add(s)
+    return brks
+
+
+def feasible_intervals(
+    lines_a: list[RouteLine],
+    lines_b: list[RouteLine],
+    budget_k: float,
+) -> list[tuple[float, float]]:
+    """Sub-intervals of [0, 1] where ``d_a(s) + d_b(s) <= budget_k``.
+
+    ``g = d_a + d_b`` is piecewise-linear; within each gap between consecutive
+    breakpoints both envelopes are a single line, so ``g`` is linear there and the
+    feasible part is found by thresholding the segment.
+    """
+    if not lines_a or not lines_b:
+        return []
+
+    breaks = {0.0, 1.0}
+    breaks |= _cone_breaks(lines_a)
+    breaks |= _cone_breaks(lines_b)
+    pts = sorted(b for b in breaks if 0.0 <= b <= 1.0)
+
+    out: list[tuple[float, float]] = []
+    for s0, s1 in zip(pts[:-1], pts[1:]):
+        if s1 - s0 < _EPS:
+            continue
+        g0 = _envelope_at(s0, lines_a) + _envelope_at(s0, lines_b)
+        g1 = _envelope_at(s1, lines_a) + _envelope_at(s1, lines_b)
+        if math.isinf(g0) or math.isinf(g1):
+            continue
+        in0 = g0 <= budget_k + 1e-6
+        in1 = g1 <= budget_k + 1e-6
+        if in0 and in1:
+            out.append((s0, s1))
+        elif not in0 and not in1:
+            continue
+        else:
+            # One endpoint feasible: find the crossing of the linear g with K.
+            denom = g1 - g0
+            t = 0.5 if abs(denom) < 1e-12 else (budget_k - g0) / denom
+            t = max(0.0, min(1.0, t))
+            s_cross = s0 + t * (s1 - s0)
+            if in0:
+                out.append((s0, s_cross))
+            else:
+                out.append((s_cross, s1))
+    return _merge_intervals(out)
+
+
+def _g_extrema(
+    a: float, b: float, lines_a: list[RouteLine], lines_b: list[RouteLine]
+) -> tuple[float, float, float]:
+    """min, mid, max of ``g = d_a + d_b`` over [a, b]."""
+    candidates = {a, b, (a + b) / 2.0}
+    for s in _cone_breaks(lines_a) | _cone_breaks(lines_b):
+        if a <= s <= b:
+            candidates.add(s)
+    vals = [
+        _envelope_at(s, lines_a) + _envelope_at(s, lines_b) for s in candidates
+    ]
+    g_mid = _envelope_at((a + b) / 2.0, lines_a) + _envelope_at((a + b) / 2.0, lines_b)
+    return min(vals), g_mid, max(vals)
+
+
+def _intersect_intervals(
+    la: list[tuple[float, float]], lb: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Intersection of two sorted, merged interval lists."""
+    out: list[tuple[float, float]] = []
+    i = j = 0
+    while i < len(la) and j < len(lb):
+        lo = max(la[i][0], lb[j][0])
+        hi = min(la[i][1], lb[j][1])
+        if hi > lo + _EPS:
+            out.append((lo, hi))
+        if la[i][1] < lb[j][1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+@dataclass(frozen=True)
+class TwoAnchorPrism:
+    """Result of a two-anchor network prism computation."""
+    total_budget_sec: float
+    min_activity_sec: float
+    shortest_path_sec: float          # min A->B travel time over the network
+    ppa: list[PrismSegment]           # activity-feasible footprint (d_a+d_b <= K)
+    slices: list[list[PrismSegment]]  # per time-slice occupiable road sets
+    slice_times: list[float]          # epoch ms for each slice
+    snap_distance_a_m: float
+    snap_distance_b_m: float
+
+
+def compute_two_anchor_prism(
+    graph: Graph,
+    dist_a: list[float],
+    dist_b: list[float],
+    candidate_edges: set[int],
+    snap_a,
+    snap_b,
+    total_budget_sec: float,
+    min_activity_sec: float,
+    slice_cutoffs: list[tuple[float, float]],
+) -> tuple[list[PrismSegment], list[list[PrismSegment]]]:
+    """Build PPA segments and per-slice segments from two labelled cones.
+
+    ``slice_cutoffs`` is a list of ``(forward_cutoff, backward_cutoff)`` pairs —
+    one per time slice, where ``forward_cutoff = t_k - t_A`` and
+    ``backward_cutoff = t_B - t_k``.
+
+    Returns ``(ppa_segments, [slice_segments, ...])``.
+    """
+    budget_k = total_budget_sec - min_activity_sec
+    ppa: list[PrismSegment] = []
+    slices: list[list[PrismSegment]] = [[] for _ in slice_cutoffs]
+
+    for edge_id in candidate_edges:
+        u, v = graph.edge_u[edge_id], graph.edge_v[edge_id]
+        c = graph.edge_cost_sec[edge_id]
+        if c <= 0:
+            continue
+        du_a, dv_a = dist_a[u], dist_a[v]
+        du_b, dv_b = dist_b[u], dist_b[v]
+
+        is_snap_a = edge_id == snap_a.edge_id
+        is_snap_b = edge_id == snap_b.edge_id
+
+        # Cheap reject: g(s) = d_a(s) + d_b(s) is concave (a tent), so its minimum
+        # over the edge sits at an endpoint. If both endpoints already exceed the
+        # budget the whole edge is infeasible — skip the per-edge interval math.
+        # Snapped edges are exempt (the snap term can make the interior reachable
+        # even when neither endpoint is).
+        if not is_snap_a and not is_snap_b:
+            if min(du_a + du_b, dv_a + dv_b) > budget_k:
+                continue
+        lines_a = _cone_lines(du_a, dv_a, c, is_snap_a, snap_a.fraction)
+        lines_b = _cone_lines(du_b, dv_b, c, is_snap_b, snap_b.fraction)
+        if not lines_a or not lines_b:
+            continue
+
+        # --- PPA: where the round-trip leaves room for the activity ----------
+        feas = feasible_intervals(lines_a, lines_b, budget_k)
+        for a, b in feas:
+            g_min, g_mid, g_max = _g_extrema(a, b, lines_a, lines_b)
+            ppa.append(_segment(
+                graph, edge_id, a, b, total_budget_sec, g_min, g_mid, g_max,
+            ))
+
+        # --- Time slices: intersection of the two cones at each instant ------
+        for k, (cf, cb) in enumerate(slice_cutoffs):
+            fwd = reachable_intervals_on_edge(
+                du=du_a, dv=dv_a, edge_cost=c, cutoff_sec=cf,
+                edge_id=edge_id,
+                snap_edge_id=snap_a.edge_id, snap_fraction=snap_a.fraction,
+            )
+            if not fwd:
+                continue
+            bwd = reachable_intervals_on_edge(
+                du=du_b, dv=dv_b, edge_cost=c, cutoff_sec=cb,
+                edge_id=edge_id,
+                snap_edge_id=snap_b.edge_id, snap_fraction=snap_b.fraction,
+            )
+            if not bwd:
+                continue
+            inter = _intersect_intervals(fwd, bwd)
+            # Keep slices inside the activity-feasible footprint.
+            inter = _intersect_intervals(inter, feas) if feas else []
+            for a, b in inter:
+                g_min, g_mid, g_max = _g_extrema(a, b, lines_a, lines_b)
+                slices[k].append(_segment(
+                    graph, edge_id, a, b, total_budget_sec, g_min, g_mid, g_max,
+                ))
+
+    return ppa, slices
+
+
+def _segment(
+    graph: Graph,
+    edge_id: int,
+    a: float,
+    b: float,
+    total_budget_sec: float,
+    g_min: float,
+    g_mid: float,
+    g_max: float,
+) -> PrismSegment:
+    coords = _clip_edge_to_wgs84(graph, edge_id, a, b)
+    return PrismSegment(
+        edge_id=edge_id,
+        interval_a=a,
+        interval_b=b,
+        highway=graph.edge_highway[edge_id],
+        travel_total_min=g_min,
+        travel_total_max=g_max,
+        # activity = T - g  (largest where travel is smallest, and vice-versa)
+        activity_sec_min=total_budget_sec - g_max,
+        activity_sec_mid=total_budget_sec - g_mid,
+        activity_sec_max=total_budget_sec - g_min,
+        coords_wgs84=coords,
+    )
+
+
+@dataclass(frozen=True)
+class FastPPA:
+    """Vectorised PPA result — one reachable road edge per array entry.
+
+    Each edge is kept whole (no sub-edge interval clipping); boundary edges are
+    over-included by at most one short segment, which is invisible at road
+    scale and avoids the per-edge interval math that does not scale to a full
+    city network.
+    """
+    edge_id: np.ndarray         # int64 [N]
+    lon0: np.ndarray            # float64 [N]
+    lat0: np.ndarray
+    lon1: np.ndarray
+    lat1: np.ndarray
+    z: np.ndarray               # height of the edge (time-window midpoint)
+    time_progress: np.ndarray   # z mapped back to [0, 1]
+    activity_sec_min: np.ndarray
+    activity_sec_mid: np.ndarray
+    activity_sec_max: np.ndarray
+    travel_total_min: np.ndarray
+
+    def __len__(self) -> int:
+        return int(self.edge_id.size)
+
+
+def compute_ppa_fast(
+    graph: Graph,
+    dist_a: list[float],
+    dist_b: list[float],
+    candidate_edges,
+    total_budget_sec: float,
+    min_activity_sec: float,
+    z_start: float,
+    z_end: float,
+) -> FastPPA | None:
+    """Vectorised two-cone PPA — O(edges), one whole edge per reachable road.
+
+    Each edge is lifted to a height from the midpoint of the time window during
+    which it can be occupied (``[t_A + d_a, t_B - d_b]`` at the edge's best
+    point), so roads near A sit low, roads near B sit high, and the stack forms
+    the 3-D prism. The flat ground projection of the same edges is the 2-D PPA.
+    """
+    budget_k = total_budget_sec - min_activity_sec
+    edges = np.fromiter(candidate_edges, dtype=np.int64, count=len(candidate_edges))
+    if edges.size == 0:
+        return None
+
+    eu = np.asarray(graph.edge_u, dtype=np.int64)[edges]
+    ev = np.asarray(graph.edge_v, dtype=np.int64)[edges]
+    c = np.asarray(graph.edge_cost_sec, dtype=np.float64)[edges]
+
+    da = np.asarray(dist_a, dtype=np.float64).copy()
+    db = np.asarray(dist_b, dtype=np.float64).copy()
+    da[~np.isfinite(da)] = _SENTINEL
+    db[~np.isfinite(db)] = _SENTINEL
+    du_a, dv_a = da[eu], da[ev]
+    du_b, dv_b = db[eu], db[ev]
+
+    def _g_at(s: float) -> np.ndarray:
+        # d_a(s) + d_b(s) using the lower-envelope tent for each cone.
+        d_a = np.minimum(du_a + c * s, dv_a + c * (1.0 - s))
+        d_b = np.minimum(du_b + c * s, dv_b + c * (1.0 - s))
+        return d_a + d_b
+
+    # g is piecewise-linear and concave; its minimum is at an endpoint and its
+    # maximum at an interior breakpoint. Sample a few fractions for min/max —
+    # exact enough for the reachability fringe of a viz.
+    g0, g1 = _g_at(0.0), _g_at(1.0)
+    g_mid = _g_at(0.5)
+    g_max = np.maximum.reduce([g0, g1, g_mid, _g_at(0.25), _g_at(0.75)])
+    g_min = np.minimum(g0, g1)
+
+    feasible = g_min <= budget_k + 1e-6
+    if not feasible.any():
+        return None
+
+    edges = edges[feasible]
+    eu, ev, c = eu[feasible], ev[feasible], c[feasible]
+    du_a, dv_a = du_a[feasible], dv_a[feasible]
+    du_b, dv_b = du_b[feasible], dv_b[feasible]
+    g_min, g_mid, g_max = g_min[feasible], g_mid[feasible], g_max[feasible]
+
+    # Height: midpoint of the occupiable window at the edge's best-reached point.
+    # window = [t_A + d_a_min, t_B - d_b_min]; centre fraction in [0, 1] is
+    # 0.5 + (d_a_min - d_b_min) / (2T).
+    t = float(total_budget_sec)
+    da_min = np.minimum(du_a, dv_a)
+    db_min = np.minimum(du_b, dv_b)
+    frac = np.clip(0.5 + (da_min - db_min) / (2.0 * t), 0.0, 1.0)
+    z = z_start + frac * (z_end - z_start)
+
+    # Batched metric -> WGS84 for both endpoints.
+    xs = np.asarray(graph.xs, dtype=np.float64)
+    ys = np.asarray(graph.ys, dtype=np.float64)
+    lon0, lat0 = graph.metric_to_wgs84.transform(xs[eu], ys[eu])
+    lon1, lat1 = graph.metric_to_wgs84.transform(xs[ev], ys[ev])
+
+    return FastPPA(
+        edge_id=edges,
+        lon0=np.asarray(lon0), lat0=np.asarray(lat0),
+        lon1=np.asarray(lon1), lat1=np.asarray(lat1),
+        z=z, time_progress=frac,
+        activity_sec_min=np.maximum(0.0, t - g_max),
+        activity_sec_mid=t - g_mid,
+        activity_sec_max=t - g_min,
+        travel_total_min=g_min,
+    )
+
+
+def shortest_path_sec(dist_a: list[float], snap_b) -> float:
+    """Shortest A->B travel time using A's distance labels at B's snap seeds."""
+    best = math.inf
+    for node, seed_cost in snap_b.seeds:
+        if 0 <= node < len(dist_a):
+            d = dist_a[node]
+            if not math.isinf(d):
+                best = min(best, d + seed_cost)
+    return best

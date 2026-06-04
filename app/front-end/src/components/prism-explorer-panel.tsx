@@ -336,7 +336,7 @@ export const PrismExplorerPanel: React.FC = () => {
                 disabled
                 className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <option value="road-network-stp">PPA Road Network (per-GPS-point)</option>
+                <option value="road-network-stp">Road-Network Prism (A ↔ B)</option>
                 <option value="pasta" disabled>PASTA – H3 Potential Path Area (disabled)</option>
               </select>
             </label>
@@ -360,7 +360,7 @@ export const PrismExplorerPanel: React.FC = () => {
             {params.prismMode === 'pasta'
             ? 'Computing H3 potential path area…'
             : params.prismMode === 'road-network-stp'
-              ? 'Clipping road network…'
+              ? 'Intersecting forward & backward cones…'
               : 'Computing space-time prism…'}
           </div>
         )}
@@ -611,7 +611,25 @@ function PPARoadNetworkParams({
           className="w-full accent-blue-600"
         />
         <span className="text-xs text-gray-400 mt-0.5 block">
-          Total budget T is derived from the GPS sampling cadence; one-way cutoff R = (T − A) / 2.
+          Time budget T = anchor B time − anchor A time. A road is in the prism
+          when travel(A→x) + travel(x→B) + A ≤ T.
+        </span>
+      </label>
+
+      {/* Time slices — number of stacked 3-D levels in the prism */}
+      <label className="block">
+        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+          Time Slices: {params.timeSlices}
+        </span>
+        <input
+          type="range" min={2} max={30} step={1}
+          value={params.timeSlices}
+          onChange={e => dispatch(updateParams({ timeSlices: Number(e.target.value) }))}
+          className="w-full accent-blue-600"
+        />
+        <span className="text-xs text-gray-400 mt-0.5 block">
+          Vertical levels of the 3-D prism between A and B · the flat 2-D PPA is
+          their projection
         </span>
       </label>
 
@@ -637,69 +655,6 @@ function PPARoadNetworkParams({
           Pick a loaded road LineString dataset, or leave empty
         </span>
       </label>
-
-      {/* Performance & rendering — collapsed by default so the main panel
-          stays focused on the PPA-semantic controls. The knobs here only
-          affect how many origins and segments get rendered, not the PPA
-          computation itself. */}
-      <details className="group border border-gray-200 dark:border-gray-700 rounded-md">
-        <summary className="cursor-pointer select-none text-xs font-medium text-gray-700 dark:text-gray-200 px-2 py-1.5 list-none flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-md">
-          <span>Performance &amp; Rendering</span>
-          <span className="text-gray-400 group-open:rotate-90 transition-transform">›</span>
-        </summary>
-
-        <div className="px-2 py-2 space-y-3 border-t border-gray-200 dark:border-gray-700">
-          {/* Max origins cap */}
-          <label className="block">
-            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-              Max GPS Origins: {params.maxOrigins}
-            </span>
-            <input
-              type="range" min={5} max={120} step={1}
-              value={params.maxOrigins}
-              onChange={e => dispatch(updateParams({ maxOrigins: Number(e.target.value) }))}
-              className="w-full accent-blue-600"
-            />
-            <span className="text-xs text-gray-400 mt-0.5 block">
-              Fewer = faster · More = denser stack between anchors
-            </span>
-          </label>
-
-          {/* Static cluster merge radius */}
-          <label className="block">
-            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-              Merge Static Origins: {params.clusterRadiusMeters} m
-            </span>
-            <input
-              type="range" min={0} max={500} step={5}
-              value={params.clusterRadiusMeters}
-              onChange={e => dispatch(updateParams({ clusterRadiusMeters: Number(e.target.value) }))}
-              className="w-full accent-blue-600"
-            />
-            <span className="text-xs text-gray-400 mt-0.5 block">
-              Consecutive GPS points within this radius collapse into one PPA at the
-              cluster centre · 0 disables merging
-            </span>
-          </label>
-
-          {/* Per-origin render-segment cap */}
-          <label className="block">
-            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-              Segments per PPA: {params.maxSegmentsPerOrigin || 'unlimited'}
-            </span>
-            <input
-              type="range" min={0} max={2000} step={50}
-              value={params.maxSegmentsPerOrigin}
-              onChange={e => dispatch(updateParams({ maxSegmentsPerOrigin: Number(e.target.value) }))}
-              className="w-full accent-blue-600"
-            />
-            <span className="text-xs text-gray-400 mt-0.5 block">
-              Trims the lowest-dwell fringe roads per PPA to keep the 3D layer
-              responsive · 0 = unlimited (may lag on dense GPS)
-            </span>
-          </label>
-        </div>
-      </details>
     </>
   );
 }
@@ -712,20 +667,17 @@ async function computeRoadNetworkSTP(
     customSpeed: number;
     roadNetworkDatasetId: string;
     minActivityMinutes: number;
-    maxOrigins: number;
-    clusterRadiusMeters: number;
-    maxSegmentsPerOrigin: number;
+    timeSlices: number;
   },
   mapDatasets: Record<string, MapDataset>,
   ownedDatasetIds: string[],
 ): Promise<FeatureCollection[]> {
   const sourceData = buildPrismSourceData(mapDatasets, ownedDatasetIds);
 
-  // Send all trajectory Point features (not just the anchor window) so the
-  // backend can derive the full trajectory's bounds + time range. The PPA
-  // engine filters internally to the anchor sub-window when picking origin
-  // GPS points, but it uses the global bounds/range to align the Z scale
-  // with the rendered trajectory's _height field.
+  // Send all trajectory Point features so the backend can derive the global
+  // bounds + time range, which only align the prism's Z scale with the
+  // rendered trajectory height. The two-anchor prism itself depends only on
+  // the two picked anchors (A and B) — no per-GPS-point sampling.
   const features = sourceData.features.filter(f => f.geometry?.type === 'Point');
 
   const options: Record<string, any> = {
@@ -734,14 +686,11 @@ async function computeRoadNetworkSTP(
     prismMode: 'gps-road-network',
     speedMode: params.speedMode,
     customSpeed: params.customSpeed,
-    // PPA-engine parameters per PPA_ESTIMATION.md.
-    // totalBudgetMinutes is intentionally omitted — the backend derives T
-    // from the trajectory's GPS sampling cadence so that anchors picked on
-    // the trajectory are always reachable.
+    // Two-anchor network prism: T defaults to the anchor time window
+    // (t_B − t_A) on the backend; a road point x is kept when
+    // travel(A→x) + travel(x→B) + activity ≤ T.
     minActivityMinutes: params.minActivityMinutes,
-    maxOrigins: params.maxOrigins,
-    clusterRadiusMeters: params.clusterRadiusMeters,
-    maxSegmentsPerOrigin: params.maxSegmentsPerOrigin,
+    timeSlices: params.timeSlices,
   };
   if (params.roadNetworkDatasetId && mapDatasets[params.roadNetworkDatasetId]) {
     options.roadNetworkData = mapDatasets[params.roadNetworkDatasetId].data;

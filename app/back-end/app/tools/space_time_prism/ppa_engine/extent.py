@@ -26,16 +26,18 @@ from .profiles import ModeProfile
 logger = logging.getLogger(__name__)
 
 
-# Soft area cap (handbook §25) — guards against pathological extent that
-# would hammer Overpass. The interactive prism explorer relies on real
-# trajectories whose padded extents routinely exceed the handbook defaults,
-# so the caps here are generous; callers can override via
-# ``options.maxAnalysisAreaKm2`` when even larger downloads are desired.
+# Auto-download area cap (handbook §25). These bound how much OSM road data an
+# interactive prism will pull *and build into a graph* per request — too large
+# and the Overpass download + graph build + per-edge math grind for minutes.
+# When the reachability extent exceeds the cap, the two-anchor prism downloads
+# only a cap-sized corridor and clips (see network_prism._corridor_bbox_to_area).
+# Faster modes reach farther, so their caps are larger; callers can override via
+# ``options.maxAnalysisAreaKm2`` (e.g. when a local road dataset is loaded).
 MAX_ANALYSIS_AREA_KM2 = {
-    "walking": 5_000.0,
-    "cycling": 10_000.0,
-    "transit": 20_000.0,
-    "driving": 50_000.0,
+    "walking": 1_500.0,
+    "cycling": 2_500.0,
+    "transit": 3_000.0,
+    "driving": 3_000.0,
 }
 
 
