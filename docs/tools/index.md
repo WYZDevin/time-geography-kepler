@@ -3,12 +3,12 @@
 Time Geography Kepler ships four analysis tools. Each takes a point trajectory
 and produces an interactive 3D result.
 
-| Tool | Question it answers | Runs on | Time player |
-|------|--------------------|---------|:-----------:|
-| [3D Trajectory](/tools/trajectory-3d) | Where and when did the subject move? | Browser | ✅ |
-| [Space-Time Kernel Density](/tools/stkde) | Where/when does activity concentrate? | Browser | ✅ |
-| [Space-Time Cube](/tools/space-time-cube) | What was the exposure along the path? | Backend | — |
-| [Space-Time Prism](/tools/space-time-prism) | Where could the subject have been? | Backend | ✅ |
+| Tool | Question it answers | Method | Runs on | Time player |
+|------|--------------------|--------|---------|:-----------:|
+| [3D Trajectory](/tools/trajectory-3d) | Where and when did the subject move? | Time-geographic space-time path (Hägerstrand) | Browser | ✅ |
+| [Space-Time Kernel Density](/tools/stkde) | Where/when does activity concentrate? | Space-time KDE, Epanechnikov kernels (Brunsdon et al.) | Browser | ✅ |
+| [Space-Time Cube](/tools/space-time-cube) | What was the exposure along the path? | `(x, y, t)` grid aggregation + env join | Backend | — |
+| [Space-Time Prism](/tools/space-time-prism) | Where could the subject have been? | Two-anchor road-network PPA (Miller) | Backend | ✅ |
 
 ## Choosing a tool
 
