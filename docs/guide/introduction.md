@@ -25,22 +25,12 @@ backend for heavier server-side computation.
 
 ## The toolset at a glance
 
-| Tool | What it answers | Where it runs |
-|------|-----------------|---------------|
-| [3D Trajectory](/tools/trajectory-3d) | *Where and when did the subject move?* | Browser |
-| [Space-Time Kernel Density](/tools/stkde) | *Where/when does activity concentrate?* | Browser |
-| [Space-Time Cube](/tools/space-time-cube) | *What was the environmental exposure along the path?* | Backend |
-| [Space-Time Prism](/tools/space-time-prism) | *Where could the subject have been between two points?* | Backend |
-
-## How a tool runs
-
-Each tool declares an **execution policy** that determines where it can run:
-
-- `frontend_only` — runs exclusively in the browser.
-- `backend_only` — requires the Flask backend.
-- `hybrid` — can run in either place; you choose with a mode toggle.
-
-See the [Architecture reference](/reference/architecture) for the full data flow.
+| Tool | What it answers |
+|------|-----------------|
+| [3D Trajectory](/tools/trajectory-3d) | *Where and when did the subject move?* |
+| [Space-Time Kernel Density](/tools/stkde) | *Where/when does activity concentrate?* |
+| [Space-Time Cube](/tools/space-time-cube) | *What was the environmental exposure along the path?* |
+| [Space-Time Prism](/tools/space-time-prism) | *Where could the subject have been between two points?* |
 
 ::: tip Next steps
 New here? Read the [Core Concepts](/guide/concepts), then follow

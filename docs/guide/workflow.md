@@ -39,18 +39,6 @@ Click **Run Analysis**. Results render on the 3D map, where you can:
 - **Hover** — read a feature's values (counts, exposure, timestamps) in a tooltip.
 - **Toggle layers** — show/hide individual result layers from the legend.
 
-## Execution mode
-
-For tools that support both, a **mode toggle** lets you pick **Browser** or
-**Backend** execution:
-
-- **Browser** keeps everything local and works offline.
-- **Backend** offloads heavy computation to the Flask server (required for the
-  Space-Time Cube and Space-Time Prism).
-
-The mode toggle only appears when a choice is actually available — if the backend
-is offline, backend-only tools are disabled until it comes back.
-
 ::: tip Map controls & pins
 Beyond analysis, the map itself supports zoom, bearing/pitch reset, basemap
 switching, and a **pin-point mode** for marking features. See

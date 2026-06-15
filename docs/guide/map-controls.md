@@ -60,4 +60,33 @@ The legend (bottom-left) lists every active result layer. Use it to:
 
 - Toggle a layer's **visibility** (eye icon).
 - Adjust **color / thickness** where supported.
-- **Export** the current view as GeoJSON.
+- **Export** the layer as analysis-ready GeoJSON.
+
+### What an export contains
+
+Exports are meant for further analysis in ArcGIS, QGIS, or Python
+(geopandas) — not for re-creating the 3D scene — so the file differs from
+what is drawn on the map:
+
+- **Geometry is flat 2D WGS84.** The map lifts vertices to a synthetic
+  *time = altitude* z; the export strips it. Time is exported as attributes
+  instead: `timestamp_ms` (epoch milliseconds) and `time_iso` (ISO 8601).
+- **Only analysis attributes are kept** — densities, counts, dwell/activity
+  times, travel times, durations, and your original input columns. Renderer
+  fields (extrusion heights, normalized time fractions, per-feature colors)
+  are removed, as are list-valued fields that cannot live in an attribute
+  table.
+- Internal names are exported as plain ones, e.g. `_user_id` → `user_id`,
+  `_confidence` → `confidence_level`, `_ppa_total_area_km2` → `ppa_area_km2`.
+- The collection carries `name`, `dataset_type`, `tool`, and `exported_at`
+  as top-level members for provenance (readers that don't know them ignore
+  them).
+
+Multi-output analyses (e.g. the prism's roads / dwell surface / anchors)
+export **one file per output**, since each output has its own geometry type
+and attribute schema — mixed collections do not convert cleanly to feature
+classes or GeoDataFrames.
+
+The full rename table lives in the
+[Tools overview](/tools/#exporting-results), and each tool page documents its
+exact per-output fields under **Exported data**.

@@ -3,7 +3,7 @@
 > Compute the potential path area — where a subject could have been between two
 > timed anchor points, constrained by a road network and a travel speed.
 
-**Tool ID:** `space-time-prism` · **Runs:** Backend (`backend_only`)
+**Tool ID:** `space-time-prism`
 
 Given two known points in space and time (*"here at 9:00, there at 10:00"*), the
 **space-time prism** is everything reachable in between. Its ground shadow is the
@@ -16,10 +16,9 @@ floating panel where you place anchors directly on the map.
 
 - **Where:** click **Start Prism Explorer** (bottom-left of the map) — the prism
   is *not* in the regular tool picker; it has its own panel.
-- **Where it runs:** on the **Flask backend** (`backend_only`). Start the backend
-  (or use Docker) first. The explorer downloads OSM roads for the anchor extent at
-  run time, so the machine running the backend needs network access to OSM (the
-  result is cached on disk for reuse).
+- **Network access:** the explorer downloads OSM roads for the anchor extent at
+  run time, so it needs network access to OSM (the result is cached on disk for
+  reuse).
 - **Input:** two anchors A and B placed on the map (each carrying a location and a
   time). Anchors may snap to data points or be picked freely. No dataset is
   strictly required, but the time budget comes from the two anchors' timestamps.

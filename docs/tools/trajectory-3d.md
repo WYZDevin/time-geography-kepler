@@ -3,7 +3,7 @@
 > Visualize movement trajectories in 3D space-time (X = longitude, Y = latitude,
 > Z = time).
 
-**Tool ID:** `time-geography` · **Runs:** Browser (`frontend_only`)
+**Tool ID:** `time-geography`
 
 The 3D Trajectory tool draws each subject's **space-time path** — a line that
 climbs as the day advances. Steep, near-vertical segments are stays; long, flat
@@ -14,8 +14,6 @@ segments are fast movement.
 - **Where:** built into the app — pick **3D Trajectory** (🕐) from the tool
   selector, choose a point dataset, and set the **Datetime Column** under
   attribute mapping.
-- **Where it runs:** entirely in the browser (`frontend_only`). No backend or
-  Flask server is required, and it works fully offline.
 - **Limits:** tuned for up to ~100,000 points; trajectories above ~50k points
   render more slowly.
 - **Input:** a `FeatureCollection` of `Point` features, each with a timestamp.

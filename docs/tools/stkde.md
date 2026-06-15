@@ -3,7 +3,7 @@
 > Generate a 3D space-time kernel density estimation with auto-determined
 > parameters.
 
-**Tool ID:** `stkde` · **Runs:** Browser (`frontend_only`)
+**Tool ID:** `stkde`
 
 STKDE smooths discrete events into a continuous **3D density volume**, revealing
 where **and when** activity concentrates. The result is rendered as nested
@@ -13,9 +13,6 @@ confidence surfaces.
 
 - **Where:** built into the app — pick **Space-Time Kernel Density** (🌊) from
   the tool selector, choose a point dataset, and set the **Datetime Column**.
-- **Where it runs:** in the browser (`frontend_only`), using a TensorFlow.js
-  kernel evaluation. No backend is required. (A backend STKDE implementation
-  exists and mirrors the same math, but the UI runs the frontend version.)
 - **Limits:** recommended up to ~50,000 points; the evaluation grid is capped at
   **50 × 50 cells** to avoid WebGL memory errors.
 - **Input:** a `FeatureCollection` of `Point` features with timestamps.

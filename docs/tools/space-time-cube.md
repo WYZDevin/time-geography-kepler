@@ -3,7 +3,7 @@
 > Aggregate trajectory points into a 3D grid of cells through time — and overlay
 > an environmental field to read exposure along the path.
 
-**Tool ID:** `space-time-cube` · **Runs:** Backend (`backend_only`)
+**Tool ID:** `space-time-cube`
 
 The Space-Time Cube discretizes the study area into a grid and stacks those cells
 across time slices. Each **cube** represents one cell during one time slice.
@@ -12,9 +12,6 @@ across time slices. Each **cube** represents one cell during one time slice.
 
 - **Where:** built into the app — pick **Space-Time Cube** (🧊) from the tool
   selector and choose a point dataset.
-- **Where it runs:** on the **Flask backend** (`backend_only`). Start the backend
-  (`uv run flask --app app run -p 8000`) or run via Docker before executing. The
-  tool is disabled in the UI when the backend is offline.
 - **Input:** a trajectory `FeatureCollection` of timestamped `Point` features.
   Optionally a second **environment dataset** (a gridded field such as noise or
   PM2.5).
@@ -43,9 +40,7 @@ Both share a single color scale, so the cubes and the path read together.
 
 ## Walkthrough
 
-Using the bundled sample `example_day_2022-09-16.geojson` (748 GPS fixes). The
-Space-Time Cube runs on the **backend**, so start the Flask server (or Docker)
-first — the tool is disabled in the picker while the backend is offline.
+Using the bundled sample `example_day_2022-09-16.geojson` (748 GPS fixes).
 
 ### 1. Load data & pick the tool
 
