@@ -41,6 +41,51 @@ trajectory in space and time. Then:
 
 Both share a single color scale, so the cubes and the path read together.
 
+## Walkthrough
+
+Using the bundled sample `example_day_2022-09-16.geojson` (748 GPS fixes). The
+Space-Time Cube runs on the **backend**, so start the Flask server (or Docker)
+first — the tool is disabled in the picker while the backend is offline.
+
+### 1. Load data & pick the tool
+
+Upload the file from the **Data** panel (**Upload → GeoJSON File**), as in the
+[Running an Analysis](/guide/workflow) guide, then choose **Space-Time Cube**
+from **Select Analysis Tool**.
+
+### 2. Configure (count mode)
+
+Select the data source and confirm the **Datetime Column** (`date_logged`).
+Leave **Grid Cell Size** at `0` (auto — the panel shows the size it will use for
+this dataset) and the default **10** equal-interval slices. With no environment
+dataset attached, the tool runs in **count mode**.
+
+![Space-Time Cube configuration](/screenshots/cube-configure.png)
+
+Further down the panel, the dependent options guard themselves: **Align Start
+Times** stays disabled until you pick a **Trajectory ID Column**, and
+**Environmental Indicator** stays disabled until an **Environment Dataset** is
+chosen — each enables itself once its prerequisite is set.
+
+### 3. Run & read the result
+
+Click **Run Analysis**. Each cube is one grid cell during one time slice,
+colored by how many fixes fell inside it; the trajectory threads up through the
+stack. **Rotate** to read the time (Z) axis and **hover** a cube for its count.
+
+![Space-Time Cube result (count mode)](/screenshots/cube-result.png)
+
+### Exposure mode (with an environment dataset)
+
+To read environmental exposure along the path, also upload a gridded
+**environment dataset** — the bundled `noise_environment_2022-09-16.geojson` is
+ready to use (hourly noise in `noise_db`). In the tool options, set
+**Environment Dataset** to it and pick `noise_db` as the **Environmental
+Indicator**. Now each cube is colored by the **mean value** experienced there
+and the trajectory line is colored by exposure at each step, on one shared
+scale. See [Preparing an environment dataset](#preparing-an-environment-dataset)
+below for the expected format.
+
 ## Algorithm
 
 A **space-time cube** in the sense of Hägerstrand's time geography: the study
@@ -68,6 +113,10 @@ cell.
 | Option | Key | Default | Description |
 |--------|-----|---------|-------------|
 | **Datetime Column** | *(attribute mapping)* | — | Field holding each trajectory point's timestamp. Required. |
+| **Time Slice Method** | `timeSliceMethod` | Equal interval | How the time range is divided: **Equal interval** (every slice covers the same amount of time), **Equal count** (each slice holds ~the same number of points; durations vary, so the Z axis is no longer uniform in time), or **Fixed duration** (slices of an exact length aligned to an anchor time). |
+| **Number of Time Slices** | `timeSlices` | 10 | How many slices to stack the cubes into along the time (Z) axis. Shown for Equal interval / Equal count. |
+| **Slice Duration (hours)** | `sliceDurationHours` | 24 | Fixed duration only: length of each slice (24 = daily). The slice count follows from the data's time span (capped at 240). |
+| **Align Slices To** | `sliceAnchor` | — | Fixed duration only: a date/time the slice boundaries align to (e.g. midnight → calendar days). Empty = start at the first data point. Ignored when *Align Start Times* is on. |
 | **Show 3D Coordinate Axes** | `showAxes` | on | Draw labeled X/Y/Z reference axes. |
 | **Z-Axis Time Labels Interval** | `timeBreaks` | Auto | Tick spacing on the time axis. |
 | **Trajectory ID Column** | `userIdField` | — | Identifies separate trajectories (see *Multiple trajectories*). Required to enable alignment. |
@@ -77,8 +126,7 @@ cell.
 
 ::: info Backend tunables
 The backend also accepts `cellSize` (override the automatic cell size, in the
-grid's projected units) and `timeSlices` (default 10). The UI uses the automatic
-defaults.
+grid's projected units). The UI uses the automatic default.
 :::
 
 ## Preparing an environment dataset
@@ -111,6 +159,50 @@ in the browser — only the small, enriched trajectory travels to the backend.
 - **Trajectory line** — the path through the stack, colored by exposure; it's
   drawn on top so it stays visible through the cubes.
 - **Hover** a cube or the path to read the underlying value.
+
+## Exported data
+
+Exports follow the [shared conventions](/tools/#exporting-results): flat 2D
+WGS84 geometry, analysis attributes only. Cube cells export as their ground
+footprint; the slice attributes carry the time dimension.
+
+### Cube cells (`space-time-cube`)
+
+Square grid-cell polygons, one feature per cell *per time slice* containing at
+least one trajectory point.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `count` | integer | Number of trajectory points in the cell during the slice. |
+| `env_value` | number \| null | Mean environment value of the cell-slice (exposure mode); `null` when no environment points fall in it. |
+| `time_slice_index` | integer | 0-based slice index along the time axis. |
+| `time_value` | string | Slice center time (ISO 8601). |
+| `time_range` | string | The slice's actual time span ("start – end"). |
+| `timestamp_ms`, `time_iso` | — | Slice center time as epoch ms / ISO 8601. |
+
+To rebuild the space-time structure, group on `time_slice_index` — all cells
+of a slice share the value.
+
+### Exposure path (`stc-trajectory`)
+
+LineString segments between consecutive fixes (built per subject — segments
+never bridge two trajectories).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `time_value` | string | Segment start time (ISO 8601). |
+| `env_exposure` | number | Mean environment value over the segment (exposure mode only). |
+
+### Ground projection (`stc-ground`)
+
+Present when the ground projection option is on — the cube stack collapsed
+onto the map plane.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `count` | integer | Points in the cell across the whole period. |
+| `env_value` | number \| null | Mean environment value across the whole period. |
+| `ground_projection` | boolean | Always `true`; marks the flat surface. |
 
 ## Multiple trajectories
 
