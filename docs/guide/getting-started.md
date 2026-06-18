@@ -1,8 +1,19 @@
 # Getting Started
 
-You can run the whole platform with **Docker** — one free app to install and two
+This page takes you from nothing installed to your **first space-time analysis**.
+You run the whole platform with **Docker** — one free app to install and two
 copy-paste commands. **No download, no coding, and no programming knowledge is
 required.**
+
+The path is four steps:
+
+1. **[Install Docker Desktop](#step-1-—-install-docker-desktop)** — the free app that runs everything for you.
+2. **[Start the app](#step-2-—-start-the-app)** — launch the two ready-made images.
+3. **[Open it](#step-3-—-open-the-app-in-your-browser)** in your browser.
+4. **[Run your first analysis](#step-4-—-run-your-first-space-time-analysis)** on a sample trajectory.
+
+Everything after Step 4 — starting and stopping, updating, building from source,
+and troubleshooting — is reference you can come back to later.
 
 ## Step 1 — Install Docker Desktop
 
@@ -84,24 +95,43 @@ Go to:
 You should see the **Space-Time Analytics Platform** home screen. That's it — the
 app is running on your own computer.
 
-## See and control it in Docker Desktop
+## Step 4 — Run your first space-time analysis
 
-You don't have to live in the terminal. Open **Docker Desktop** and click the
+Now turn that running app into a real result. A **space-time analysis** plots your
+movement data in 3D, where height — the **Z axis** — is **time**, so a trajectory
+climbs as the day goes on.
+
+1. **Load a trajectory.** Open the **Data** panel and choose **Upload → GeoJSON
+   File**. Don't have data yet? Download this small sample first, then upload it:
+   [sample-trajectory.geojson](https://github.com/WYZDevin/time-geography-kepler/raw/main/app/front-end/e2e/fixtures/sample-trajectory.geojson).
+2. **Pick a tool.** On the **Select Analysis Tool** screen, choose **3D
+   Trajectory** — the simplest space-time view and the best place to start.
+3. **Map the Datetime Column.** Point it at the field holding each point's
+   timestamp (in the sample it's `timestamp`). This step is required — the time
+   axis depends on it.
+4. **Run & explore.** Click **Run Analysis**, then **drag to rotate** the map so
+   the vertical time axis comes into view. Hover any point to read its values.
+
+🎉 That's a complete space-time analysis. From here, try the analytical tools —
+[Space-Time Kernel Density](/tools/stkde), [Space-Time Cube](/tools/space-time-cube),
+and [Space-Time Prism](/tools/space-time-prism) — or read the full
+[Running an Analysis](/guide/workflow) walkthrough.
+
+---
+
+## Managing the app
+
+Once you've run your first analysis, here's how to keep the app running day to day.
+
+### Start, stop, and restart
+
+**The easy way (Docker Desktop):** open **Docker Desktop** and click the
 **Containers** tab on the left. You'll see **tgk-frontend** and **tgk-backend**,
-each showing a green **Running** status.
+each showing a green **Running** status. With no typing, you can:
 
-From here, with no typing, you can:
-
-- Click the **`5173:80`** port link next to **tgk-frontend** to open the app in
-  your browser.
-- Press the **Stop** (■) button to shut a part down.
-- Press **Start** (▶) later to run it again.
+- Click the **`5173:80`** port link next to **tgk-frontend** to open the app.
+- Press **Stop** (■) to shut a part down, and **Start** (▶) to run it again later.
 - Click a container to watch its logs if something looks wrong.
-
-## Stopping and restarting
-
-**The easy way (Docker Desktop):** open **Containers** and press **Stop** (■) on
-**tgk-frontend** and **tgk-backend**. Press **Start** (▶) when you want them back.
 
 **From the terminal:**
 
@@ -110,7 +140,7 @@ docker stop tgk-frontend tgk-backend     # stop the app
 docker start tgk-frontend tgk-backend    # start it again later
 ```
 
-## Updating to the latest version
+### Update to the latest version
 
 To pick up the newest release, download fresh images and recreate the app:
 
@@ -122,19 +152,7 @@ docker rm -f tgk-backend tgk-frontend
 
 Then run the two commands from **Step 2** again.
 
-## Your first analysis
-
-1. Click **Data → Upload** and load a trajectory file. Don't have one? Download
-   this small sample first:
-   [sample-trajectory.geojson](https://github.com/WYZDevin/time-geography-kepler/raw/main/app/front-end/e2e/fixtures/sample-trajectory.geojson).
-2. Pick a tool — start with **3D Trajectory**.
-3. Map the **Datetime Column** to your timestamp field (in the sample it's
-   `timestamp`).
-4. Click **Run Analysis** and explore the 3D result.
-
-Full walkthrough: [Running an Analysis](/guide/workflow).
-
-## Advanced: run from the source code
+### Advanced: run from the source code
 
 Prefer to build it yourself — for example, to change the code? Get the project and
 use Docker Compose instead:
