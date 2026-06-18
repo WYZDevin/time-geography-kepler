@@ -21,7 +21,9 @@ export class TimeGeographyTool implements SimpleTool {
   category = 'visualization' as const;
   version = '2.0.0';
   capabilities = {
-    executionPolicy: 'frontend_only' as const,
+    // TEMPORARY: all computation moved to the backend; browser execution is
+    // disabled. Restore 'frontend_only' to re-enable the analyze() path below.
+    executionPolicy: 'backend_only' as const,
     recommendations: {
       frontendMaxRows: 100000,
       notes: ['Large trajectories (>50k points) may cause slower rendering'],
@@ -35,41 +37,25 @@ export class TimeGeographyTool implements SimpleTool {
   getOptionSchema(): ToolOptionSchema[] {
     return [
       {
-        key: 'visualizeStay',
-        label: 'Visualize Stay Points',
-        type: 'boolean',
-        defaultValue: false
-      },
-      {
         key: 'showAxes',
         label: 'Show 3D Axis',
+        description: 'Draw the X/Y/Z reference axes around the space-time path to help orient the view in space and time.',
         type: 'boolean',
-        defaultValue: true
+        defaultValue: true,
+        group: 'Display'
       },
       {
         key: 'show2D',
         label: 'Show 2D Ground Path',
         description: 'Also draw the trajectory flattened onto the map plane (Z=0) — the route as seen from above.',
         type: 'boolean',
-        defaultValue: false
-      },
-      {
-        key: 'userIdField',
-        label: 'User ID Column',
-        description: 'Split the trajectory by this column — each user is drawn as its own distinctly-colored path',
-        type: 'field',
-        defaultValue: ''
-      },
-      {
-        key: 'alignUserTime',
-        label: 'Align User Start Times',
-        description: 'When a User ID column is set and multiple users exist, start every user at the same ground level so the Z-axis shows elapsed time (Day 1…Day n) instead of absolute time. Useful when users were tracked over different date ranges.',
-        type: 'boolean',
-        defaultValue: false
+        defaultValue: false,
+        group: 'Display'
       },
       {
         key: 'timeBreaks',
         label: 'Z-Axis Time Labels Interval',
+        description: 'How often to label the vertical time (Z) axis. "Auto" shows only the start and end times; the fixed intervals add evenly spaced tick labels.',
         type: 'select',
         defaultValue: 'auto',
         options: [
@@ -78,21 +64,55 @@ export class TimeGeographyTool implements SimpleTool {
           { label: 'Every 4 Hours', value: '4h' },
           { label: 'Every 12 Hours', value: '12h' },
           { label: 'Every 24 Hours', value: '24h' }
-        ]
+        ],
+        group: 'Display'
+      },
+      {
+        key: 'userIdField',
+        label: 'User ID Column',
+        note: 'Only for multi-user trajectory data',
+        description: 'Split the trajectory by this column — each user is drawn as its own distinctly-colored path',
+        type: 'field',
+        defaultValue: '',
+        group: 'Trajectory & time alignment'
+      },
+      {
+        key: 'alignUserTime',
+        label: 'Align User Start Times',
+        note: 'Only for multi-user trajectory data',
+        requires: 'userIdField',
+        description: 'When a User ID column is set and multiple users exist, start every user at the same ground level so the Z-axis shows elapsed time (Day 1…Day n) instead of absolute time. Useful when users were tracked over different date ranges.',
+        type: 'boolean',
+        defaultValue: false,
+        group: 'Trajectory & time alignment'
+      },
+      {
+        key: 'visualizeStay',
+        label: 'Visualize Stay Points',
+        description: 'Detect and highlight stay points — places where the subject lingered instead of moving — as separate markers on top of the trajectory.',
+        type: 'boolean',
+        defaultValue: false,
+        group: 'Stay points'
       },
       {
         key: 'stayField',
         label: 'Stay Location Field',
+        description: 'Optional. Column whose value marks a stay: consecutive points sharing the same value are grouped into one stay. Leave empty to detect stays automatically from the time window below.',
         type: 'field',
-        defaultValue: ''
+        defaultValue: '',
+        requires: 'visualizeStay',
+        group: 'Stay points'
       },
       {
         key: 'timeWindow',
         label: 'Stay Point Time Window (hours)',
+        description: 'Used when no Stay Location Field is set: points clustered within this many hours near the same location are treated as a single stay.',
         type: 'number',
         defaultValue: 24,
         min: 1,
-        max: 168
+        max: 168,
+        requires: 'visualizeStay',
+        group: 'Stay points'
       }
     ];
   }

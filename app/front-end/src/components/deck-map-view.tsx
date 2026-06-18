@@ -3,55 +3,70 @@ import { useAppDispatch, useAppSelector } from '@/stores/store';
 import { setViewState, setMapStyle, pushAnchor, setAnimationProgress, setAnimationPlaying } from '@/stores/map-slice';
 import { setAnchorA, setAnchorB, updateParams } from '@/stores/prism-explorer-slice';
 import { addPin, removePin, type Pin } from '@/stores/pin-slice';
+import { selectResearchAreaGeoJSON } from '@/stores/research-area-slice';
 import { createDeckLayers } from '@/services/layer-factory';
-import { ScatterplotLayer, LineLayer } from '@deck.gl/layers';
+import { ScatterplotLayer, LineLayer, GeoJsonLayer } from '@deck.gl/layers';
+import { WebMercatorViewport } from '@deck.gl/core';
+import type { FeatureCollection } from '@/interfaces/data-interfaces';
+import type { MapViewState } from '@/interfaces/map-types';
 import { Map } from 'react-map-gl/maplibre';
 import DeckGL from '@deck.gl/react';
 import { MapLegend } from './map-legend';
 import { MapControls } from './map-controls';
-import { PrismExplorerPanel } from './prism-explorer-panel';
+import { PrismIllustration } from './prism-illustration';
+import { resolveMapStyleProp, skyGradientClass } from '@/utils/map-styles';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-const MAP_STYLES: Record<string, string> = {
-  positron: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-  'dark-matter': 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  satellite: getSatelliteStyleUrl(),
-};
+type LngLatBounds = [[number, number], [number, number]];
 
-function getSatelliteStyleUrl(): string {
-  const mapboxToken = (
-    (import.meta.env.VITE_MAPBOX_API_KEY as string) ||
-    (import.meta.env.VITE_MAPBOX_TOKEN as string) ||
-    ''
-  ).trim();
-
-  if (mapboxToken) {
-    return `https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12?access_token=${mapboxToken}`;
+/**
+ * Bounding box of a polygon FeatureCollection (the research area). Walks nested
+ * Polygon/MultiPolygon coordinate arrays down to [lng, lat] pairs. Returns null
+ * when there are no finite coordinates.
+ */
+function researchAreaBounds(fc: FeatureCollection | null): LngLatBounds | null {
+  if (!fc || fc.features.length === 0) return null;
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node) && typeof node[0] === 'number') {
+      const [lng, lat] = node as number[];
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      return;
+    }
+    if (Array.isArray(node)) for (const child of node) visit(child);
+  };
+  for (const f of fc.features) {
+    const geom = f.geometry as { coordinates?: unknown } | null;
+    if (geom?.coordinates) visit(geom.coordinates);
   }
+  if (!isFinite(minLng) || !isFinite(minLat)) return null;
+  return [[minLng, minLat], [maxLng, maxLat]];
+}
 
-  return JSON.stringify({
-    version: 8,
-    sources: {
-      'esri-satellite': {
-        type: 'raster',
-        tiles: [
-          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        ],
-        tileSize: 256,
-        maxzoom: 18,
-        attribution: 'Esri, Maxar, Earthstar Geographics',
-      },
-    },
-    layers: [
-      {
-        id: 'esri-satellite-layer',
-        type: 'raster',
-        source: 'esri-satellite',
-        minzoom: 0,
-        maxzoom: 22,
-      },
-    ],
-  });
+/**
+ * View state that frames `bounds` within a `width`×`height` viewport, flattened
+ * to a top-down view so the boundary reads clearly. Returns null if the
+ * viewport has no size yet.
+ */
+function fitViewToBounds(bounds: LngLatBounds, width: number, height: number): Partial<MapViewState> | null {
+  if (width <= 0 || height <= 0) return null;
+  try {
+    const { longitude, latitude, zoom } = new WebMercatorViewport({ width, height })
+      .fitBounds(bounds, { padding: 48 });
+    return {
+      longitude,
+      latitude,
+      zoom: Math.min(Math.max(zoom, 1), 18),
+      pitch: 0,
+      bearing: 0,
+      transitionDuration: 600,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Keys to hide from tooltip (internal/visual-only properties)
@@ -175,7 +190,8 @@ export const DeckMapView: React.FC<DeckMapViewProps> = ({ width, height }) => {
 
   // Spread a plain copy — Immer freezes Redux state objects, but deck.gl's
   // controller mutates viewState (adds `padding`, `transitionDuration`, etc.)
-  const mutableViewState = useMemo(() => ({ ...viewState }), [viewState]);
+  // maxPitch 85 lifts deck.gl's 60° default; 85 is MapLibre's hard ceiling.
+  const mutableViewState = useMemo(() => ({ ...viewState, maxPitch: 85 }), [viewState]);
 
   // Build deck.gl layers from descriptors (ephemeral, not stored)
   const baseLayers = useMemo(
@@ -306,13 +322,59 @@ export const DeckMapView: React.FC<DeckMapViewProps> = ({ width, height }) => {
     ];
   }, [pins]);
 
+  // Research area boundary overlay — a stroked, lightly-filled polygon drawn
+  // beneath analysis output so the user can see the clip region.
+  const researchArea = useAppSelector(selectResearchAreaGeoJSON);
+  const researchAreaEnabled = useAppSelector(s => s.researchArea.enabled);
+  const researchAreaVisible = useAppSelector(s => s.researchArea.visible);
+
+  // When the research area is set or changed, frame it: fit the camera to the
+  // boundary so the user immediately sees the area they defined. We remember the
+  // last-fitted bounds and skip the initial mount (adopt a persisted area
+  // without yanking the camera), so the zoom only fires on a genuine change.
+  const fittedAreaSig = useRef<string | null>(null);
+  const areaFitInitialized = useRef(false);
+  useEffect(() => {
+    const bounds = researchAreaBounds(researchArea);
+    const sig = bounds ? bounds.flat().map(n => n.toFixed(5)).join(',') : null;
+    if (!areaFitInitialized.current) {
+      areaFitInitialized.current = true;
+      fittedAreaSig.current = sig;
+      return;
+    }
+    if (!sig || sig === fittedAreaSig.current) return;
+    const view = bounds && fitViewToBounds(bounds, width, height);
+    if (!view) return; // viewport not sized yet — retry when width/height land
+    fittedAreaSig.current = sig;
+    dispatch(setViewState(view));
+  }, [researchArea, width, height, dispatch]);
+
+  const researchAreaOverlayLayers = useMemo(() => {
+    if (!researchAreaVisible || !researchArea || researchArea.features.length === 0) return [];
+    const active = researchAreaEnabled;
+    return [
+      new GeoJsonLayer({
+        id: 'research-area-boundary',
+        data: researchArea as any,
+        stroked: true,
+        filled: true,
+        getFillColor: active ? [16, 185, 129, 25] : [120, 120, 120, 15],
+        getLineColor: active ? [16, 185, 129, 220] : [120, 120, 120, 160],
+        getLineWidth: 2,
+        lineWidthUnits: 'pixels' as const,
+        lineWidthMinPixels: 2,
+        pickable: false,
+        parameters: { depthTest: false },
+      }),
+    ];
+  }, [researchArea, researchAreaEnabled, researchAreaVisible]);
+
   const deckLayers = useMemo(
-    () => [...baseLayers, ...explorerOverlayLayers, ...pinOverlayLayers],
-    [baseLayers, explorerOverlayLayers, pinOverlayLayers],
+    () => [...researchAreaOverlayLayers, ...baseLayers, ...explorerOverlayLayers, ...pinOverlayLayers],
+    [researchAreaOverlayLayers, baseLayers, explorerOverlayLayers, pinOverlayLayers],
   );
 
-  const styleUrl = MAP_STYLES[mapStyle] ?? MAP_STYLES.positron;
-  const mapStyleProp = styleUrl.startsWith('{') ? JSON.parse(styleUrl) : styleUrl;
+  const mapStyleProp = resolveMapStyleProp(mapStyle);
 
   const onViewStateChange = useCallback(
     (params: { viewState: Record<string, unknown> }) => {
@@ -366,6 +428,22 @@ export const DeckMapView: React.FC<DeckMapViewProps> = ({ width, height }) => {
         setHoverInfo(null);
       } else {
         setHoverInfo({ x: info.x, y: info.y, properties: ppa });
+      }
+      return;
+    }
+
+    // Space-Time Cube voxels: surface the environmental exposure value (mean
+    // env_value aggregated into the cell) front and centre, alongside the point
+    // count and slice time. The raw feature otherwise dumps z, slice index,
+    // extrusion height and time-order bookkeeping into the tooltip. Detected by
+    // the cell signature (time_slice_index + count) because deck-adapter strips
+    // _dataset_type from feature properties before rendering.
+    if ('time_slice_index' in properties && 'count' in properties) {
+      const cube = buildCubeTooltipProps(properties);
+      if (Object.keys(cube).length === 0) {
+        setHoverInfo(null);
+      } else {
+        setHoverInfo({ x: info.x, y: info.y, properties: cube });
       }
       return;
     }
@@ -464,9 +542,14 @@ export const DeckMapView: React.FC<DeckMapViewProps> = ({ width, height }) => {
     }
   }, [dispatch, prismMode, pinMode]);
 
+  // Backdrop for the transparent above-horizon region at high pitch — the map
+  // paints no sky, so the container background shows through. Follows the
+  // basemap (not the app theme): the map style setting only restyles the map.
+  const skyClass = skyGradientClass(mapStyle);
+
   return (
     <div
-      className="relative"
+      className={`relative ${skyClass}`}
       style={{ width, height }}
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -483,11 +566,12 @@ export const DeckMapView: React.FC<DeckMapViewProps> = ({ width, height }) => {
         <Map
           mapStyle={mapStyleProp}
           style={{ width, height }}
+          maxPitch={85}
         />
       </DeckGL>
       <MapControls />
       <MapLegend />
-      <PrismExplorerPanel />
+      <PrismIllustration />
       {!isExplorerActive && selectedAnchors.length > 0 && <AnchorSelectionBadge anchors={selectedAnchors} />}
       {hoverInfo && <MapTooltip info={hoverInfo} />}
     </div>
@@ -588,6 +672,31 @@ function buildPpaTooltipProps(properties: Record<string, unknown>): Record<strin
 
   const travelMin = formatSecondsAsMin(properties.travel_sec_mid);
   if (travelMin) out['Travel time'] = travelMin;
+
+  return out;
+}
+
+function buildCubeTooltipProps(properties: Record<string, unknown>): Record<string, unknown> {
+  // Space-Time Cube cells carry a handful of useful fields among internal
+  // bookkeeping. Show the exposure value (mean env_value) when an environment
+  // dataset was joined, plus the point count and the slice time.
+  const out: Record<string, unknown> = {};
+
+  const exposure = properties.env_value;
+  if (typeof exposure === 'number' && Number.isFinite(exposure)) {
+    out['Exposure'] = exposure.toFixed(2);
+  }
+
+  const count = properties.count;
+  if (typeof count === 'number' && Number.isFinite(count)) {
+    out['Points'] = count;
+  }
+
+  const timeValue = properties.time_value;
+  if (typeof timeValue === 'string') {
+    const d = new Date(timeValue);
+    if (!isNaN(d.getTime())) out['Time'] = d.toLocaleString();
+  }
 
   return out;
 }

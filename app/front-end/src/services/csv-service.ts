@@ -201,6 +201,79 @@ export const validateCoordinates = (lng: number, lat: number): {
 };
 
 /**
+ * Readable-timestamp handling
+ *
+ * A raw Unix epoch (seconds or milliseconds) is unreadable in the data table,
+ * tooltips, and the Datetime Column picker. On import we detect such columns and
+ * add a human-readable sibling column so the original epoch is preserved while a
+ * friendly form is also available.
+ */
+
+/** Suffix appended to a detected epoch column to hold its readable form. */
+export const READABLE_SUFFIX = '_readable';
+
+// Plausible epoch windows, restricted to years 2000–2100 so arbitrary large
+// numbers (IDs, phone numbers, measurements) don't get misread as timestamps.
+// The seconds and milliseconds windows are disjoint, so a value's magnitude
+// alone determines its unit (mirrors the backend's seconds-vs-ms split).
+const EPOCH_SECONDS_MIN = 9.46e8; // 2000-01-01
+const EPOCH_SECONDS_MAX = 4.1e9; // ~2100
+const EPOCH_MILLIS_MIN = 9.46e11; // 2000-01-01
+const EPOCH_MILLIS_MAX = 4.1e12; // ~2100
+
+const isEpochValue = (v: unknown): v is number =>
+  typeof v === 'number' &&
+  Number.isFinite(v) &&
+  ((v >= EPOCH_SECONDS_MIN && v <= EPOCH_SECONDS_MAX) ||
+    (v >= EPOCH_MILLIS_MIN && v <= EPOCH_MILLIS_MAX));
+
+/**
+ * Convert a raw epoch number to a friendly UTC string: "YYYY-MM-DD HH:MM".
+ * Values in the seconds window are scaled to milliseconds first. Returns null
+ * for anything outside a plausible epoch range.
+ */
+export const epochToReadable = (value: unknown): string | null => {
+  if (!isEpochValue(value)) return null;
+  const ms = value <= EPOCH_SECONDS_MAX ? value * 1000 : value;
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  );
+};
+
+/**
+ * Detect columns that hold raw Unix epoch numbers. A column qualifies when it is
+ * numeric and every sampled non-empty value falls in a plausible epoch range.
+ * Columns named in `exclude` (e.g. mapped coordinates) and columns whose readable
+ * sibling already exists are skipped.
+ */
+export const detectEpochColumns = (
+  data: Record<string, unknown>[],
+  exclude: (string | null | undefined)[] = []
+): string[] => {
+  if (data.length === 0) return [];
+  const excluded = new Set(exclude.filter(Boolean) as string[]);
+  const headers = Object.keys(data[0]);
+  const existing = new Set(headers);
+  const SAMPLE = 100;
+
+  return headers.filter(header => {
+    if (excluded.has(header) || header.endsWith(READABLE_SUFFIX)) return false;
+    if (existing.has(header + READABLE_SUFFIX)) return false;
+    let seen = 0;
+    for (const row of data) {
+      const v = row[header];
+      if (v === null || v === undefined || v === '') continue;
+      if (!isEpochValue(v)) return false;
+      if (++seen >= SAMPLE) break;
+    }
+    return seen > 0;
+  });
+};
+
+/**
  * Convert CSV data to GeoJSON
  */
 export const csvToGeoJSON = (
@@ -224,6 +297,13 @@ export const csvToGeoJSON = (
   if (!coordinateMapping.longitude || !coordinateMapping.latitude) {
     throw new Error('Longitude and latitude columns must be specified');
   }
+
+  // Columns holding raw epoch numbers get a readable sibling column added below.
+  const epochColumns = detectEpochColumns(data, [
+    coordinateMapping.longitude,
+    coordinateMapping.latitude,
+    coordinateMapping.altitude,
+  ]);
 
   data.forEach((row, index) => {
     try {
@@ -280,6 +360,14 @@ export const csvToGeoJSON = (
             properties[key] = row[key];
           }
         });
+
+        // Add a readable sibling column for each raw-epoch timestamp column.
+        for (const col of epochColumns) {
+          const readable = epochToReadable(row[col]);
+          if (readable !== null) {
+            properties[col + READABLE_SUFFIX] = readable;
+          }
+        }
       }
 
       // Create feature

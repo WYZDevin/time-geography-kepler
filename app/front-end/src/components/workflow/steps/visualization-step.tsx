@@ -5,9 +5,11 @@ import { resetWorkflow, setCurrentStep, addToHistory } from '../../../stores/wor
 import { AnalysisResult, createAnalysisEngine } from '../../../services/analysis-engine';
 import { DeckAdapter } from '../../deck-adapter';
 import { toolRegistry } from '@/utils/tool-registry';
-import { exportViewAsGeoJSON, exportMultipleDatasetsAsGeoJSON } from '../../../services/export-service';
+import { exportAnalysisGeoJSON } from '../../../services/export-service';
 import { Download } from 'lucide-react';
 import { getLargeFile } from '../../../services/large-file-cache';
+import { selectActiveResearchArea } from '../../../stores/research-area-slice';
+import { BackendProgress } from '../../custom-components/backend-progress';
 
 const VisualizationStep = () => {
     const dispatch = useAppDispatch();
@@ -23,6 +25,7 @@ const VisualizationStep = () => {
 
     const deckDatasets = useAppSelector(state => state.map.datasets);
     const selectedAnchors = useAppSelector(state => state.map.selectedAnchors);
+    const activeResearchArea = useAppSelector(selectActiveResearchArea);
     const hasExistingData = useMemo(() => {
         return Object.keys(deckDatasets).length > 0;
     }, [deckDatasets]);
@@ -73,6 +76,7 @@ const VisualizationStep = () => {
                 attributes: fieldMapping || undefined,
                 options: effectiveOptions,
                 mode: executionMode || 'frontend',
+                researchArea: activeResearchArea || undefined,
             };
 
             const result = await analysisEngine.execute(request);
@@ -110,7 +114,7 @@ const VisualizationStep = () => {
         } finally {
             setIsAnalyzing(false);
         }
-    }, [selectedData, selectedToolId, fieldMapping, toolOptions, sideLength, heightScale, analysisEngine, dispatch, hasExistingData, selectedAnchors, dataSourcesById]);
+    }, [selectedData, selectedToolId, fieldMapping, toolOptions, sideLength, heightScale, analysisEngine, dispatch, hasExistingData, selectedAnchors, dataSourcesById, activeResearchArea]);
 
     // For individual prism mode: wait for 2 anchor selections before running.
     // PASTA mode is schedule-based and should run immediately.
@@ -138,13 +142,24 @@ const VisualizationStep = () => {
         if (!analysisResult?.success || analysisResult.outputs.length === 0) {
             return;
         }
+        // One analysis-grade file per output: each output has its own geometry
+        // type and attribute schema, and ArcGIS / geopandas expect a single
+        // schema per file — a merged mixed-geometry collection does not
+        // convert cleanly. Downloads are staggered so the browser does not
+        // swallow all but the first.
         const date = new Date().toISOString().slice(0, 10);
-        const filename = `${analysisResult.toolId}-results-${date}.geojson`;
-        if (analysisResult.outputs.length === 1) {
-            exportViewAsGeoJSON(analysisResult.outputs[0], filename);
-        } else {
-            exportMultipleDatasetsAsGeoJSON(analysisResult.outputs, filename);
-        }
+        analysisResult.outputs.forEach((output, index) => {
+            if (output.features.length === 0) return;
+            const dsType = (output.features[0]?.properties?._dataset_type as string)
+                || `output-${index + 1}`;
+            window.setTimeout(() => {
+                exportAnalysisGeoJSON(output, `${analysisResult.toolId}-${dsType}-${date}.geojson`, {
+                    label: dsType,
+                    datasetType: dsType,
+                    tool: analysisResult.toolId,
+                });
+            }, index * 300);
+        });
     };
 
     const handleNewAnalysis = () => {
@@ -161,9 +176,36 @@ const VisualizationStep = () => {
         };
     }, []);
 
+    // Tool options echo — only the options the user actually set, labelled and
+    // grouped by the schema's functional groups (same grouping as the options
+    // step), so the configuration recap stays compact instead of dumping every
+    // toggle as Yes/No.
+    const groupedConfigOptions = useMemo(() => {
+        const schema = selectedTool?.getOptionSchema?.() ?? [];
+        const metaByKey = new Map(schema.map(o => [o.key, o]));
+        const order: string[] = [];
+        const byGroup = new Map<string, { key: string; label: string; value: unknown }[]>();
+        Object.entries(toolOptions || {}).forEach(([key, value]) => {
+            if (key.endsWith('Data') || key.startsWith('_')) return;          // internal/payload keys
+            if (value === null || value === undefined) return;
+            if (typeof value === 'object') return;
+            if (typeof value === 'string' && value.trim() === '') return;     // unset field/text
+            if (value === false) return;                                      // disabled toggle — omit
+            const meta = metaByKey.get(key);
+            const group = meta?.group ?? 'Other';
+            const label = meta?.label ?? key.replace(/([A-Z])/g, ' $1').trim();
+            if (!byGroup.has(group)) { byGroup.set(group, []); order.push(group); }
+            byGroup.get(group)!.push({ key, label, value });
+        });
+        return order.map(group => ({ group, items: byGroup.get(group)! }));
+    }, [selectedTool, toolOptions]);
+
+    const hasFieldMapping = !!fieldMapping && Object.values(fieldMapping).some(Boolean);
+    const hasConfig = hasFieldMapping || groupedConfigOptions.length > 0;
+
     return (
         <div className="h-full flex flex-col p-6">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+            <div className="shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center">
                         <span className="text-2xl mr-3">{selectedTool?.icon}</span>
@@ -215,11 +257,53 @@ const VisualizationStep = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Surface runMeta.warnings: things the run did differently from
+                    what was configured (ignored anchor, capped slice counts, …) */}
+                {(analysisResult?.runMeta?.warnings?.length ?? 0) > 0 && (
+                    <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <div className="text-sm font-medium text-amber-800 mb-1">⚠️ Warnings</div>
+                        <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                            {analysisResult!.runMeta!.warnings!.map((w, i) => (
+                                <li key={i}>{w}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
             </div>
+
+            {/* Append vs Overwrite Selection Prompt — kept at the top so it's
+                visible without scrolling the configuration card below. */}
+            {mapActionChoice === 'pending' && (
+                <div className="shrink-0 mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center animate-in slide-in-from-bottom-2 duration-300 relative overflow-hidden">
+                    <div className="absolute top-0 w-full left-0 h-1 bg-blue-500 animate-pulse"></div>
+                    <h4 className="font-bold text-gray-900 text-xl mb-2 flex items-center justify-center">
+                        <span className="mr-2">🗺️</span> Map Action Required
+                    </h4>
+                    <p className="text-gray-700 mb-6 text-base font-medium">Your map already contains data layers. <br />Would you like to add this new analysis on top, or clear the map and start fresh?</p>
+                    <div className="flex flex-col sm:flex-row justify-center items-center space-y-3 sm:space-y-0 sm:space-x-4">
+                        <Button
+                            onClick={() => setMapActionChoice('append')}
+                            size="lg"
+                            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 shadow-md transition-all hover:scale-105"
+                        >
+                            ➕ Append to existing map
+                        </Button>
+                        <Button
+                            onClick={() => setMapActionChoice('overwrite')}
+                            variant="outline"
+                            size="lg"
+                            className="w-full sm:w-auto border-gray-400 bg-white text-gray-800 hover:bg-gray-100 font-bold px-8 shadow-sm transition-all hover:border-gray-500"
+                        >
+                            🔄 Overwrite previous map
+                        </Button>
+                    </div>
+                </div>
+            )}
 
             {/* Prism tool: waiting for anchor selection */}
             {isInteractivePrism && !prismReady && (
-                <div className="mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center">
+                <div className="shrink-0 mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center">
                     <h4 className="font-bold text-gray-900 text-xl mb-2">
                         Select Two Points on the Map
                     </h4>
@@ -246,66 +330,65 @@ const VisualizationStep = () => {
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 flex-1">
                 <h3 className="font-semibold text-gray-800 mb-4">Analysis Configuration</h3>
 
-                {fieldMapping && (
-                    <div className="mb-4">
-                        <h4 className="font-medium text-gray-700 mb-2">Field Mapping</h4>
-                        <div className="space-y-2">
-                            {Object.entries(fieldMapping).map(([key, value]) => (
-                                value && (
-                                    <div key={key} className="flex justify-between text-sm">
-                                        <span className="text-gray-600 capitalize">{key}:</span>
-                                        <span className="font-medium">{value}</span>
-                                    </div>
-                                )
-                            ))}
+                {/* Loading Display Section */}
+                {isAnalyzing && (
+                    <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                                <div className="animate-spin w-5 h-5 border-2 border-yellow-600 border-t-transparent rounded-full"></div>
+                            </div>
+                            <div className="ml-3">
+                                <h4 className="font-medium text-yellow-800 mb-1">Analysis In Progress</h4>
+                                <p className="text-yellow-700 text-sm">
+                                    Processing your data... This may take a few moments depending on the dataset size and complexity.
+                                </p>
+                            </div>
                         </div>
+                        <BackendProgress className="mt-3" />
                     </div>
                 )}
 
-                {toolOptions && Object.keys(toolOptions).length > 0 && (
-                    <div className="mb-4">
-                        <h4 className="font-medium text-gray-700 mb-2">Tool Options</h4>
-                        <div className="space-y-2">
-                            {Object.entries(toolOptions)
-                                .filter(([key, value]) => !key.endsWith('Data') && value !== null && typeof value !== 'object')
-                                .map(([key, value]) => (
-                                <div key={key} className="flex justify-between text-sm">
-                                    <span className="text-gray-600 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
-                                    <span className="font-medium">
-                                        {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
-                                    </span>
+                {hasConfig && (
+                    <details open={!analysisResult?.success} className="mb-4 group/config border-b border-gray-100 pb-4">
+                        <summary className="flex items-center gap-2 cursor-pointer list-none font-medium text-gray-700 select-none">
+                            <span className="text-xs text-gray-400 transition-transform group-open/config:rotate-90">▶</span>
+                            <span>Configuration</span>
+                        </summary>
+
+                        <div className="mt-3 space-y-4">
+                            {hasFieldMapping && (
+                                <div>
+                                    <h5 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Field Mapping</h5>
+                                    <div className="space-y-1.5">
+                                        {Object.entries(fieldMapping!).map(([key, value]) => (
+                                            value && (
+                                                <div key={key} className="flex justify-between text-sm">
+                                                    <span className="text-gray-600 capitalize">{key}:</span>
+                                                    <span className="font-medium">{value}</span>
+                                                </div>
+                                            )
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {groupedConfigOptions.map(({ group, items }) => (
+                                <div key={group}>
+                                    <h5 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">{group}</h5>
+                                    <div className="space-y-1.5">
+                                        {items.map(({ key, label, value }) => (
+                                            <div key={key} className="flex justify-between text-sm">
+                                                <span className="text-gray-600">{label}:</span>
+                                                <span className="font-medium">
+                                                    {typeof value === 'boolean' ? 'Yes' : String(value)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             ))}
                         </div>
-                    </div>
-                )}
-
-                {/* Append vs Overwrite Selection Prompt - MOVED TO TOP FOR VISIBILITY */}
-                {mapActionChoice === 'pending' && (
-                    <div className="mb-6 p-6 bg-blue-50 border-2 border-blue-400 shadow-xl rounded-lg text-center animate-in slide-in-from-bottom-2 duration-300 relative overflow-hidden">
-                        <div className="absolute top-0 w-full left-0 h-1 bg-blue-500 animate-pulse"></div>
-                        <h4 className="font-bold text-gray-900 text-xl mb-2 flex items-center justify-center">
-                            <span className="mr-2">🗺️</span> Map Action Required
-                        </h4>
-                        <p className="text-gray-700 mb-6 text-base font-medium">Your map already contains data layers. <br />Would you like to add this new analysis on top, or clear the map and start fresh?</p>
-                        <div className="flex flex-col sm:flex-row justify-center items-center space-y-3 sm:space-y-0 sm:space-x-4">
-                            <Button
-                                onClick={() => setMapActionChoice('append')}
-                                size="lg"
-                                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 shadow-md transition-all hover:scale-105"
-                            >
-                                ➕ Append to existing map
-                            </Button>
-                            <Button
-                                onClick={() => setMapActionChoice('overwrite')}
-                                variant="outline"
-                                size="lg"
-                                className="w-full sm:w-auto border-gray-400 bg-white text-gray-800 hover:bg-gray-100 font-bold px-8 shadow-sm transition-all hover:border-gray-500"
-                            >
-                                🔄 Overwrite previous map
-                            </Button>
-                        </div>
-                    </div>
+                    </details>
                 )}
 
                 {analysisResult?.success && (
@@ -475,22 +558,6 @@ const VisualizationStep = () => {
                     </div>
                 )}
 
-                {/* Loading Display Section */}
-                {isAnalyzing && (
-                    <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                        <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                                <div className="animate-spin w-5 h-5 border-2 border-yellow-600 border-t-transparent rounded-full"></div>
-                            </div>
-                            <div className="ml-3">
-                                <h4 className="font-medium text-yellow-800 mb-1">Analysis In Progress</h4>
-                                <p className="text-yellow-700 text-sm">
-                                    Processing your data... This may take a few moments depending on the dataset size and complexity.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
 
             {/* DeckAdapter handles visualization separately from analysis logic */}

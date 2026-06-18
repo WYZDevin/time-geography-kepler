@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { GeoJsonLayer, ScatterplotLayer, PathLayer, TextLayer, LineLayer, ColumnLayer, PolygonLayer } from '@deck.gl/layers';
+import { DataFilterExtension } from '@deck.gl/extensions';
 import type { DeckLayerDescriptor, MapDataset, AnimationMode } from '@/interfaces/map-types';
 import { hexToRgb } from './color-schemes';
 import { PROCESSED_HEIGHT_FIELD, PROCESSED_TIME_FIELD } from '@/utils/constants';
@@ -64,7 +65,7 @@ function buildLayer(desc: DeckLayerDescriptor, dataset: MapDataset | undefined, 
     case 'scatterplot':
       return buildScatterplotLayer(desc, dataset);
     case 'path':
-      return buildPathLayer(desc, dataset);
+      return buildPathLayer(desc, dataset, anim);
     case 'line':
       return buildLineLayer(desc, dataset, anim);
     case 'column':
@@ -103,7 +104,6 @@ function buildGeoJsonLayer(desc: DeckLayerDescriptor, dataset: MapDataset, anim:
 
   const colorAccessor = buildColorAccessor(desc);
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const solidLayer = new GeoJsonLayer({
     id: desc.id,
     data: featureCollection as any,
@@ -203,14 +203,14 @@ function buildScatterplotLayer(desc: DeckLayerDescriptor, dataset: MapDataset) {
 // PathLayer — trajectories, axes lines
 // ---------------------------------------------------------------------------
 
-function buildPathLayer(desc: DeckLayerDescriptor, _dataset: MapDataset) {
+function buildPathLayer(desc: DeckLayerDescriptor, _dataset: MapDataset, anim: AnimationParams) {
   const cfg = desc.config;
 
   // PathLayer expects data as array of path objects with a `path` property
   // (array of [lng, lat, z] coordinates). The deck-adapter prepares this.
   const pathData = (cfg.pathData ?? []) as any[];
 
-  return new PathLayer({
+  const layerProps: any = {
     id: desc.id,
     data: pathData,
     pickable: true,
@@ -222,15 +222,54 @@ function buildPathLayer(desc: DeckLayerDescriptor, _dataset: MapDataset) {
     getColor: (d: any) => d.properties?.color_rgba ?? [...desc.color, 220] as [number, number, number, number],
     getWidth: (cfg.widthScale as number) ?? 2,
     widthUnits: 'pixels' as const,
-    widthMinPixels: 1,
+    widthMinPixels: (cfg.widthMinPixels as number) ?? 1,
 
     jointRounded: true,
     capRounded: true,
 
+    // depthTest:false draws paths over solid geometry — the PPA prism is lifted
+    // to "time" altitude where the depth buffer loses precision and Chrome's
+    // ANGLE pipeline would otherwise depth-cull the lines entirely.
+    parameters: cfg.depthTest === false ? { depthTest: false } : undefined,
+
     updateTriggers: {
       getColor: [desc.color],
     },
-  });
+  };
+
+  // GPU-side two-cone time filter (used by the PPA road network). The geometry
+  // is uploaded once; each animation frame only updates the `filterRange`
+  // uniform — no per-frame CPU filtering or buffer re-upload, so scrubbing
+  // through time stays smooth even for tens of thousands of edges. Each path
+  // carries its forward (A→edge) and backward (edge→B) travel times normalised
+  // to [0,1]. At animation time t the reachable slice is { fwd ≤ t AND bwd ≤
+  // 1−t }, so the PPA grows out of anchor A, peaks, and contracts into anchor
+  // B — directly showing how the reachable region differs at each moment.
+  if (cfg.timeFilter2D === true) {
+    const t = anim.progress;
+    layerProps.extensions = [new DataFilterExtension({ filterSize: 2 })];
+    layerProps.getFilterValue = (d: any) =>
+      [d.properties?.fwd_norm ?? 0, d.properties?.bwd_norm ?? 0] as [number, number];
+    // progress ≥ 1 (not animating) → show the full PPA.
+    layerProps.filterRange = t >= 1 ? [[0, 1], [0, 1]] : [[0, t], [0, 1 - t]];
+  }
+
+  // GPU sheet filter (used by the on-map prism sheets). Each path carries the
+  // fraction of the time budget its sheet sits at; animating either reveals
+  // sheets bottom-up (progressive) or isolates the one nearest the current
+  // progress (window) — the prism cross-section sweeping from A to B. Same
+  // upload-once / uniform-update pattern as the two-cone filter above.
+  if (cfg.sheetFilter === true) {
+    const t = anim.progress;
+    layerProps.extensions = [new DataFilterExtension({ filterSize: 1 })];
+    layerProps.getFilterValue = (d: any) => d.properties?._sheet_frac ?? 0;
+    const half = anim.sliceCount > 0 ? 0.5 / anim.sliceCount : 0.05;
+    layerProps.filterRange = t >= 1
+      ? [0, 1]
+      : anim.mode === 'progressive' ? [0, t + half] : [t - half, t + half];
+  }
+
+  return new PathLayer(layerProps);
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +709,24 @@ function normalizeClosedRing(ring: [number, number, number][]): [number, number,
 
 type RGBAColor = [number, number, number, number];
 
+function interpolateColor(palette: RGBAColor[], t: number): RGBAColor {
+  if (palette.length === 1) return palette[0];
+
+  const scaled = t * (palette.length - 1);
+  const lowerIndex = Math.floor(scaled);
+  const upperIndex = Math.min(lowerIndex + 1, palette.length - 1);
+  const localT = scaled - lowerIndex;
+  const lower = palette[lowerIndex];
+  const upper = palette[upperIndex];
+
+  return [
+    Math.round(lower[0] + (upper[0] - lower[0]) * localT),
+    Math.round(lower[1] + (upper[1] - lower[1]) * localT),
+    Math.round(lower[2] + (upper[2] - lower[2]) * localT),
+    Math.round(lower[3] + (upper[3] - lower[3]) * localT),
+  ];
+}
+
 function buildColorAccessor(
   desc: DeckLayerDescriptor,
 ): RGBAColor | ((d: any) => RGBAColor) {
@@ -695,7 +752,7 @@ function buildColorAccessor(
 
   if (rgbPalette.length === 0) return baseColor;
 
-  // Build a quantize scale: evenly divide domain into N bins
+  // Build a continuous low-to-high gradient across every palette stop.
   return (d: any): RGBAColor => {
     const val = d.properties?.[colorField];
     if (val == null || typeof val !== 'number') return baseColor;
@@ -704,7 +761,6 @@ function buildColorAccessor(
     if (!domain) return rgbPalette[0];
 
     const t = Math.max(0, Math.min(1, (val - domain[0]) / (domain[1] - domain[0] || 1)));
-    const idx = Math.min(Math.floor(t * rgbPalette.length), rgbPalette.length - 1);
-    return rgbPalette[idx];
+    return interpolateColor(rgbPalette, t);
   };
 }

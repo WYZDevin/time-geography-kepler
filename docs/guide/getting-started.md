@@ -1,9 +1,8 @@
 # Getting Started
 
-You can run the whole platform with **Docker** — one free app to install and one
-command to start. **No coding or programming knowledge is required.**
-
-Follow the five steps below in order.
+You can run the whole platform with **Docker** — one free app to install and two
+copy-paste commands. **No download, no coding, and no programming knowledge is
+required.**
 
 ## Step 1 — Install Docker Desktop
 
@@ -18,88 +17,65 @@ have to install anything else.
 
 ::: warning Keep Docker open
 Docker Desktop must be **running** every time you start the app. If it's closed,
-the command in Step 4 will fail with a "cannot connect" error — just open Docker
+the commands in Step 2 will fail with a "cannot connect" error — just open Docker
 Desktop and try again.
 :::
 
-## Step 2 — Download the project
+## Step 2 — Start the app
 
-1. Open the project page: **<https://github.com/WYZDevin/time-geography-kepler>**
-2. Click the green **`<> Code`** button, then **Download ZIP**.
-3. **Unzip** the downloaded file. You'll get a folder named
-   **`time-geography-kepler-main`**.
-4. Move that folder somewhere easy to find, like your **Desktop** or
-   **Documents**.
+The app is published ready-made on Docker Hub, so **you don't need to download
+anything**. Pick whichever way you prefer — both do exactly the same thing.
 
-::: tip Remember where it is
-You'll point the command at this folder in the next step, so note where you put
-it (e.g. `Desktop/time-geography-kepler-main`).
+### Option A — Right inside Docker Desktop (no terminal)
+
+You can pull and start both parts without typing a single command:
+
+1. Open **Docker Desktop** and click the **search bar** at the very top.
+2. Type **`yongzwu/time-geography-backend`**, then click **Pull** on the matching
+   image.
+3. Search again for **`yongzwu/time-geography-frontend`** and **Pull** it too.
+4. Click the **Images** tab on the left. Next to **time-geography-backend**, press
+   the **Run** (▶) button. In the pop-up, open **Optional settings** and fill in:
+   - **Container name:** `tgk-backend`
+   - **Host port:** `8000`
+
+   Then click **Run**.
+5. Do the same for **time-geography-frontend**, but use:
+   - **Container name:** `tgk-frontend`
+   - **Host port:** `5173`
+
+Both parts now appear under the **Containers** tab with a green **Running**
+status. (Later, you start and stop them with the **▶ / ■** buttons there — no need
+to repeat this setup.)
+
+### Option B — Two commands (fastest)
+
+::: details How do I open a terminal?
+- **Windows:** click **Start**, type `powershell`, press Enter.
+- **Mac:** press **Cmd + Space**, type `Terminal`, press Enter.
+- **Linux:** open your **Terminal** app.
+
+You can open it **anywhere** — these commands don't depend on any folder.
 :::
 
-## Step 3 — Open a terminal **inside that folder**
-
-A "terminal" is a window where you type commands. The important part is opening
-it **inside the project folder** so the command runs in the right place.
-
-::: code-group
-
-```text [Windows]
-1. Open the "time-geography-kepler-main" folder in File Explorer.
-2. Click the address bar at the top (where the folder path is shown).
-3. Type:  powershell
-4. Press Enter.
-A blue PowerShell window opens, already inside the folder.
-```
-
-```text [Mac]
-1. Open the "Terminal" app:
-   press Cmd + Space, type "Terminal", press Enter.
-2. In the Terminal window type "cd " (the letters c, d, then a space):
-      cd 
-3. Drag the "time-geography-kepler-main" folder from Finder onto the
-   Terminal window (this pastes its location), then press Enter.
-```
-
-```text [Linux]
-1. Open your Files app and go into "time-geography-kepler-main".
-2. Right-click an empty area inside the folder.
-3. Choose "Open in Terminal".
-```
-
-:::
-
-**Check you're in the right place.** In the terminal, type the line below and
-press Enter — you should see `docker-compose.yml` listed:
-
-::: code-group
-
-```powershell [Windows]
-dir
-```
-
-```bash [Mac / Linux]
-ls
-```
-
-:::
-
-If you don't see `docker-compose.yml`, you opened the terminal in the wrong
-folder — go back to Step 3.
-
-## Step 4 — Start the app
-
-In that same terminal window, type this **exactly** and press Enter:
+Copy each line, paste it, and press Enter (run them one at a time):
 
 ```bash
-docker compose up --build
+docker run -d --name tgk-backend -p 8000:8000 yongzwu/time-geography-backend:latest
+docker run -d --name tgk-frontend -p 5173:80 yongzwu/time-geography-frontend:latest
 ```
 
-- The **first time**, this downloads and builds everything — it can take a few
-  minutes. That's normal.
-- It's ready when the text stops scrolling and you see the services running.
-- **Leave this window open** while you use the app.
+Each command prints a long line of letters and numbers when it works — that part
+is now running in the background.
 
-## Step 5 — Open the app in your browser
+::: tip First time is slower
+Whichever option you pick, the **first** start downloads the app (a few minutes,
+depending on your internet speed). That's normal, and it's instant every time
+after. If you ever see **"name is already in use"**, the app is already
+installed — just press **▶ Start** in the **Containers** tab instead.
+:::
+
+## Step 3 — Open the app in your browser
 
 Go to:
 
@@ -108,33 +84,80 @@ Go to:
 You should see the **Space-Time Analytics Platform** home screen. That's it — the
 app is running on your own computer.
 
+## See and control it in Docker Desktop
+
+You don't have to live in the terminal. Open **Docker Desktop** and click the
+**Containers** tab on the left. You'll see **tgk-frontend** and **tgk-backend**,
+each showing a green **Running** status.
+
+From here, with no typing, you can:
+
+- Click the **`5173:80`** port link next to **tgk-frontend** to open the app in
+  your browser.
+- Press the **Stop** (■) button to shut a part down.
+- Press **Start** (▶) later to run it again.
+- Click a container to watch its logs if something looks wrong.
+
 ## Stopping and restarting
 
-- **To stop the app:** click the terminal window, press **`Ctrl + C`**, then type
-  `docker compose down` and press Enter.
-- **To start it again later:** open Docker Desktop, open a terminal in the folder
-  (Step 3), and run — this time you can skip `--build`:
+**The easy way (Docker Desktop):** open **Containers** and press **Stop** (■) on
+**tgk-frontend** and **tgk-backend**. Press **Start** (▶) when you want them back.
 
-  ```bash
-  docker compose up
-  ```
+**From the terminal:**
+
+```bash
+docker stop tgk-frontend tgk-backend     # stop the app
+docker start tgk-frontend tgk-backend    # start it again later
+```
+
+## Updating to the latest version
+
+To pick up the newest release, download fresh images and recreate the app:
+
+```bash
+docker pull yongzwu/time-geography-backend:latest
+docker pull yongzwu/time-geography-frontend:latest
+docker rm -f tgk-backend tgk-frontend
+```
+
+Then run the two commands from **Step 2** again.
 
 ## Your first analysis
 
-1. Click **Data → Upload** and load a trajectory
-   (try the included `example_day_2022-09-16.geojson` file from the project folder).
+1. Click **Data → Upload** and load a trajectory file. Don't have one? Download
+   this small sample first:
+   [sample-trajectory.geojson](https://github.com/WYZDevin/time-geography-kepler/raw/main/app/front-end/e2e/fixtures/sample-trajectory.geojson).
 2. Pick a tool — start with **3D Trajectory**.
-3. Map the **Datetime Column** to your timestamp field (e.g. `date_logged`).
+3. Map the **Datetime Column** to your timestamp field (in the sample it's
+   `timestamp`).
 4. Click **Run Analysis** and explore the 3D result.
 
 Full walkthrough: [Running an Analysis](/guide/workflow).
+
+## Advanced: run from the source code
+
+Prefer to build it yourself — for example, to change the code? Get the project and
+use Docker Compose instead:
+
+1. Open **<https://github.com/WYZDevin/time-geography-kepler>**, click the green
+   **`<> Code`** button → **Download ZIP**, and unzip it.
+2. Open a terminal **inside** the unzipped folder.
+3. Run one of:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml up   # pull the ready-made images
+   docker compose up --build                       # build from your local code
+   ```
+
+The app opens at the same address: <http://localhost:5173>.
 
 ## Troubleshooting
 
 | Problem | What to do |
 |---------|------------|
-| **"Cannot connect to the Docker daemon"** | Docker Desktop isn't running — open it, wait for "Docker Desktop is running", then try Step 4 again. |
+| **"Cannot connect to the Docker daemon"** | Docker Desktop isn't running — open it, wait for "Docker Desktop is running", then try Step 2 again. |
 | **The command isn't found** (`docker: command not found`) | Docker Desktop isn't installed correctly — reinstall it (Step 1) and restart your computer. |
-| **`docker-compose.yml` not listed in Step 3** | Your terminal is in the wrong folder. Redo Step 3 so the terminal opens inside `time-geography-kepler-main`. |
-| **Nothing loads at `localhost:5173`** | Wait until the build in Step 4 finishes (the text stops scrolling), then refresh the browser. |
-| **"Port is already in use"** | Another program is using the port. Close it, or restart your computer, then run Step 4 again. |
+| **"name is already in use"** | You already set the app up. Don't re-run the commands — press **▶ Start** in Docker Desktop, or remove the old containers with `docker rm -f tgk-backend tgk-frontend` and run Step 2 again. |
+| **First start is slow / stuck on downloads** | The first run downloads the app — a few minutes is normal. Let it finish; later starts are instant. |
+| **Nothing loads at `localhost:5173`** | Give it a few seconds after Step 2, check both parts show **Running** in Docker Desktop, then refresh the browser. |
+| **"Port is already in use"** | Another program is using port 5173 or 8000. Close it (or restart your computer), then try Step 2 again. |

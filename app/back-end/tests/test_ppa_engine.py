@@ -632,7 +632,7 @@ class TestAutoDownloadIntegration:
         # Monkey-patch the underlying Overpass fetcher used by the cache
         roads_fc = _make_grid_road_network()
 
-        def fake_fetch(bbox, buffer_deg=0.0):
+        def fake_fetch(bbox, buffer_deg=0.0, mode=None):
             return gpd.GeoDataFrame.from_features(
                 roads_fc["features"], crs="EPSG:4326",
             )

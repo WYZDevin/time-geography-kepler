@@ -51,6 +51,48 @@ def _serialize(val: Any) -> Any:
     return val
 
 
+def filter_to_research_area(
+    gdf: gpd.GeoDataFrame, research_area: dict[str, Any]
+) -> gpd.GeoDataFrame:
+    """Keep only features that intersect the research-area polygon.
+
+    `research_area` may be a GeoJSON FeatureCollection or a single Feature. The
+    area is interpreted in EPSG:4326 (frontend map CRS) and reprojected to match
+    the result's CRS before the spatial test, so it works regardless of whether a
+    tool returns geographic or metric geometries. Whole features are kept (no
+    geometry cutting); a non-intersecting area yields an empty result.
+    """
+    if gdf.empty:
+        return gdf
+
+    feats = research_area.get("features")
+    if feats is None and research_area.get("type") == "Feature":
+        feats = [research_area]
+    if not feats:
+        return gdf
+
+    area = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
+    mask = area.geometry.union_all()
+    if mask.is_empty:
+        return gdf
+
+    target_crs = gdf.crs or "EPSG:4326"
+    if str(target_crs) != "EPSG:4326":
+        mask = gpd.GeoSeries([mask], crs="EPSG:4326").to_crs(target_crs).iloc[0]
+
+    kept = gdf[gdf.intersects(mask)].copy()
+    kept.attrs = dict(gdf.attrs)
+    removed = len(gdf) - len(kept)
+    if removed > 0:
+        warnings = list(kept.attrs.get("warnings", []))
+        warnings.append(
+            f"Research area clip: kept {len(kept)} of {len(gdf)} features "
+            f"({removed} outside the area)."
+        )
+        kept.attrs["warnings"] = warnings
+    return kept
+
+
 def compute_bbox(outputs: list[dict[str, Any]]) -> list[float] | None:
     """Compute [minX, minY, maxX, maxY] from a list of FeatureCollection dicts."""
     all_coords = []

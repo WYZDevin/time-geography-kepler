@@ -168,12 +168,13 @@ def _run(**overrides):
 
 
 class TestEndToEnd:
-    def test_returns_prism_and_anchors(self):
+    def test_returns_prism_surface_and_anchors(self):
         outputs = _run()
-        assert len(outputs) == 2
-        prism, anchors = outputs
+        assert len(outputs) == 3
+        prism, surface, anchors = outputs
         assert not prism.empty
         assert (prism["_dataset_type"] == "ppa-road-network").all()
+        assert (surface["_dataset_type"] == "ppa-dwell-surface").all()
         assert len(anchors) == 2
 
     def test_segments_have_3d_geometry_and_activity(self):
@@ -244,3 +245,130 @@ class TestEndToEnd:
                 {"speedMode": "walking", "autoDownloadOSM": False},
                 z_start=0.0, z_end=1000.0, total_height=1000.0,
             )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Flat H3 dwell-time surface (default main-map rendering)
+# ────────────────────────────────────────────────────────────────────────
+
+class TestDwellSurface:
+    def test_surface_cells_are_flat_polygons(self):
+        surface = _run()[1]
+        assert not surface.empty
+        assert (surface.geometry.geom_type == "Polygon").all()
+        # 2D geometry — no Z coordinate on any ring vertex.
+        assert all(len(c) == 2 for f in surface.geometry for c in f.exterior.coords)
+
+    def test_dwell_bounded_by_budget_minus_shortest_path(self):
+        # T = 3000 s, walking the 2.23 km road takes ~1603 s, so the best
+        # possible dwell anywhere is T − shortest_path ≈ 23.3 min.
+        surface = _run()[1]
+        assert surface["dwell_minutes"].max() > 0
+        assert surface["dwell_minutes"].max() <= (3000 - 1600) / 60 + 0.5
+        assert (surface["total_budget_min"] == 50.0).all()
+
+    def test_surface_keeps_minor_roads(self):
+        # The render filter drops residential edges from the drawn network, but
+        # the dwell surface aggregates the full PPA — the residential branch
+        # must still contribute cells.
+        from shapely.geometry import Point
+
+        surface = _run_driving()[1]
+        branch_tip = Point(0.010, 0.006)
+        assert surface.geometry.intersects(branch_tip.buffer(0.002)).any()
+
+    def test_explicit_resolution_override(self):
+        coarse = _run(h3Resolution=7)[1]
+        fine = _run(h3Resolution=10)[1]
+        assert len(fine) > len(coarse)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Minor-road removal from the rendered result
+# ────────────────────────────────────────────────────────────────────────
+
+# A primary trunk (A→B along y=0) with a residential branch hanging off the
+# midpoint. Both are reachable within the budget below.
+_MIXED_ROAD = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[0.0, 0.0], [0.005, 0.0], [0.010, 0.0],
+                                [0.015, 0.0], [0.020, 0.0]],
+            },
+            "properties": {"highway": "primary"},
+        },
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[0.010, 0.0], [0.010, 0.003], [0.010, 0.006]],
+            },
+            "properties": {"highway": "residential"},
+        },
+    ],
+}
+
+# 20-min driving window — plenty to traverse the trunk and the branch.
+_DRIVE_A = {"lng": 0.0, "lat": 0.0, "alt": 0.0, "timestamp": 0, "label": "A"}
+_DRIVE_B = {"lng": 0.020, "lat": 0.0, "alt": 1000.0, "timestamp": 1_200_000, "label": "B"}
+
+
+def _run_driving(**overrides):
+    opts = {
+        "speedMode": "driving",
+        "minActivityMinutes": 5,
+        "timeSlices": 6,
+        "roadNetworkData": _MIXED_ROAD,
+        "autoDownloadOSM": False,
+    }
+    opts.update(overrides)
+    return execute_network_anchor_prism(
+        _DRIVE_A, _DRIVE_B, opts,
+        z_start=0.0, z_end=1000.0, total_height=1000.0,
+    )
+
+
+class TestMinorRoadFilter:
+    def test_drops_minor_roads_by_default(self):
+        prism = _run_driving()[0]
+        highways = set(prism["highway"])
+        assert "primary" in highways
+        assert "residential" not in highways  # dropped (minor for driving)
+
+    def test_keeps_minor_roads_when_disabled(self):
+        prism = _run_driving(dropMinorRoads=False)[0]
+        highways = set(prism["highway"])
+        assert "residential" in highways
+        assert "primary" in highways
+
+    def test_records_removal_warning(self):
+        prism = _run_driving()[0]
+        assert any("minor-road" in w for w in prism.attrs.get("warnings", []))
+
+    def test_best_effort_keeps_all_when_filter_would_empty(self):
+        # An all-residential network in driving mode: dropping minor roads would
+        # remove everything, so the filter backs off and keeps the network.
+        prism = execute_network_anchor_prism(
+            _ANCHOR_A, _ANCHOR_B,
+            {
+                "speedMode": "driving",
+                "minActivityMinutes": 5,
+                "roadNetworkData": _ROAD,  # all residential
+                "autoDownloadOSM": False,
+            },
+            z_start=0.0, z_end=1000.0, total_height=1000.0,
+        )[0]
+        assert not prism.empty
+        assert set(prism["highway"]) == {"residential"}
+
+    def test_walking_keeps_residential(self):
+        # residential is the main walking network, not "minor" — must survive.
+        prism = execute_network_anchor_prism(
+            _ANCHOR_A, _ANCHOR_B, _opts(),  # walking, all-residential road
+            z_start=0.0, z_end=1000.0, total_height=1000.0,
+        )[0]
+        assert "residential" in set(prism["highway"])

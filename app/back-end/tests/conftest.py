@@ -3,6 +3,17 @@ import pytest
 from app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _isolate_osm_disk_cache(tmp_path, monkeypatch):
+    """Point the persistent OSM disk cache at a fresh temp dir per test so cached
+    downloads never leak between tests (or from a developer's real cache)."""
+    monkeypatch.setenv("STP_OSM_CACHE_DIR", str(tmp_path / "osm-cache"))
+    from app.tools.space_time_prism.ppa_engine.extent import clear_osm_cache
+    clear_osm_cache()
+    yield
+    clear_osm_cache()
+
+
 @pytest.fixture()
 def app():
     app = create_app()

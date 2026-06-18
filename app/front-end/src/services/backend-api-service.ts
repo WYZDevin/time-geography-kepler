@@ -61,7 +61,8 @@ class BackendApiService {
     data: any,
     options: Record<string, any>,
     attributes?: Record<string, any>,
-    sourceDatasetIds?: string[]
+    sourceDatasetIds?: string[],
+    researchArea?: any
   ): Promise<any | null> {
     try {
       const res = await fetch(`${this._baseUrl}/api/v1/tools/${toolId}/execute`, {
@@ -72,6 +73,7 @@ class BackendApiService {
           options,
           attributes: attributes ?? {},
           sourceDatasetIds: sourceDatasetIds ?? [],
+          ...(researchArea ? { researchArea } : {}),
         }),
       });
       if (!res.ok) {

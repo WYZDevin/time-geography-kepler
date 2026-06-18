@@ -67,7 +67,17 @@ docker compose down            # stop and remove the containers
 
 > The frontend bakes `VITE_BACKEND_URL` at build time (default `http://localhost:8000`). To target a different backend, edit the `args` under the `frontend` service in `docker-compose.yml` and rebuild.
 
-To run from pre-built images instead of building locally, see `docker-compose.prod.yml` (set the `image:` names to your registry first).
+To run from pre-built images instead of building locally, use `docker-compose.prod.yml`:
+
+```bash
+docker compose -f docker-compose.prod.yml up    # pulls images, no local build
+```
+
+The image namespace and tag are configurable via `IMAGE_NAMESPACE` (default `yongzwu`) and `IMAGE_TAG` (default `latest`).
+
+### Publish to Docker Hub
+
+See **[DEPLOY.md](DEPLOY.md)** for building and pushing the frontend + backend images to Docker Hub — both via the `scripts/docker-publish.sh` helper and the automated GitHub Actions workflow.
 
 ### Prerequisites (manual / dev mode)
 

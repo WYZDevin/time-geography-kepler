@@ -14,6 +14,7 @@ import { useKeyboardShortcuts } from './hooks/use-keyboard-shortcuts';
 import { useBackendInit } from './hooks/use-backend-init';
 import SettingsPanel from './components/settings/settings-panel';
 import { DeckMapView } from './components/deck-map-view';
+import { PrismExplorerPanel } from './components/prism-explorer-panel';
 import {
   Dialog,
   DialogContent,
@@ -25,15 +26,15 @@ const AppContent = () => {
     (state: RootState) => Object.values(state.data.dataSources),
     shallowEqual,
   );
-  const settings = useSelector((state: RootState) => state.settings);
+  const prismExplorerActive = useSelector(
+    (state: RootState) => state.prismExplorer.mode !== 'idle',
+  );
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(true);
   const [isToolboxCollapsed, setIsToolboxCollapsed] = useState(false);
   const [isDataPanelOpen, setIsDataPanelOpen] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
 
   const [hasAutoOpenedSidePanel, setHasAutoOpenedSidePanel] = useState(false);
-
-  const isDark = settings.defaultMapStyle === 'dark';
 
   // Enable keyboard shortcuts
   useKeyboardShortcuts();
@@ -56,9 +57,15 @@ const AppContent = () => {
     }
   }, [dataSources.length, hasAutoOpenedSidePanel]);
 
+  // The prism explorer lives in the toolbox area — make sure the sidebar is
+  // visible and expanded whenever the explorer is started (e.g. from the map
+  // legend button).
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', isDark);
-  }, [isDark]);
+    if (prismExplorerActive) {
+      setIsSidePanelOpen(true);
+      setIsToolboxCollapsed(false);
+    }
+  }, [prismExplorerActive]);
 
   const sidePanelWidth = isSidePanelOpen ? 600 : 0;
   const mapWidth = window.innerWidth - sidePanelWidth;
@@ -117,9 +124,12 @@ const AppContent = () => {
           >
             {/* Panel Content — workflow takes full height */}
             <div className="h-full flex flex-col relative overflow-visible">
-              {/* Workflow Section */}
+              {/* Workflow Section — the prism explorer takes over the toolbox
+                  area while it is active; closing it returns to the tools. */}
               <div className={`flex-1 min-h-0 transition-all duration-300`}>
-                {!isToolboxCollapsed ? (
+                {prismExplorerActive ? (
+                  <PrismExplorerPanel />
+                ) : !isToolboxCollapsed ? (
                   <WorkflowContainer
                     onCollapse={() => setIsToolboxCollapsed(true)}
                     isCollapsible={true}
@@ -196,8 +206,8 @@ const AppContent = () => {
 
       {/* Data Sources Dialog */}
       <Dialog open={isDataPanelOpen} onOpenChange={setIsDataPanelOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[80vh] p-0 pt-8 overflow-hidden">
-          <DataPanel className="h-[70vh]" />
+        <DialogContent className="sm:max-w-2xl h-[80vh] p-0 pt-8 overflow-hidden flex flex-col">
+          <DataPanel className="h-full min-h-0" />
         </DialogContent>
       </Dialog>
 

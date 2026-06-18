@@ -1,7 +1,7 @@
 services:
   backend:
     build: app/back-end
-    image: yongzwu/time-geography-backend:latest
+    image: ${IMAGE_NAMESPACE:-yongzwu}/time-geography-backend:${IMAGE_TAG:-latest}
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -19,7 +19,7 @@ services:
         # Baked into the bundle at build time. Override via shell env or a .env
         # file next to this compose file, then rebuild.
         VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8000}
-    image: yongzwu/time-geography-frontend:latest
+    image: ${IMAGE_NAMESPACE:-yongzwu}/time-geography-frontend:${IMAGE_TAG:-latest}
     ports:
       - "5173:80"
     restart: unless-stopped

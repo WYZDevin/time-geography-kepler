@@ -176,22 +176,143 @@ export const parseShareableURL = (): {
   return viewState;
 };
 
+// ---------------------------------------------------------------------------
+// Analysis-grade GeoJSON export
+//
+// The datasets on the map are shaped for the 3D renderer: geometry vertices
+// are lifted to a synthetic "time = altitude" z, and features carry fields
+// that exist only to drive deck.gl (extrusion heights, normalized time
+// fractions, per-feature colors). Exports meant for ArcGIS / geopandas / QGIS
+// should instead be flat 2D WGS84 features whose attributes are the analysis
+// quantities, so this transform:
+//   - strips the synthetic z from all coordinates (time stays available as
+//     timestamp attributes),
+//   - drops renderer-internal fields (underscore-prefixed unless renamed
+//     below, plus a few non-prefixed ones like z / color_rgba),
+//   - renames internal-but-meaningful fields to plain names (_timestamp →
+//     timestamp_ms, plus a human-readable time_iso derived from it),
+//   - drops non-scalar values (arrays / objects), which cannot live in an
+//     attribute table.
+// ---------------------------------------------------------------------------
+
+/** Internal fields that carry analysis meaning — exported under plain names. */
+const ANALYSIS_RENAMES: Record<string, string> = {
+  _timestamp: 'timestamp_ms',
+  _user_id: 'user_id',
+  _confidence: 'confidence_level',
+  _original_index: 'source_row_index',
+  _sequence: 'sequence',
+  _elapsed_ms: 'elapsed_ms',
+  _slice: 'slice_index',
+  _segment: 'segment_index',
+  // Stay points (time geography)
+  _stay_id: 'stay_id',
+  _stay_label: 'stay_label',
+  _stay_duration: 'stay_duration_sec',
+  _stay_point_count: 'stay_point_count',
+  // Potential Path Area summary stats (interactive prism)
+  _ppa_total_area_m2: 'ppa_area_m2',
+  _ppa_total_area_km2: 'ppa_area_km2',
+  _speed_kmh: 'speed_kmh',
+  _time_span_min: 'time_span_min',
+  _distance_m: 'anchor_distance_m',
+  _feasible_segments: 'feasible_segments',
+  _infeasible_segments: 'infeasible_segments',
+};
+
+/** Renderer fields not caught by the underscore rule: synthetic z values
+ *  (z, z_axis), renderer scaling helpers (side_length is the grid extent in
+ *  degrees used for the z scale), colors, and GPU-filter normalizations. */
+const VIS_ONLY_FIELDS = new Set(['z', 'z_axis', 'side_length', 'color_rgba', 'fwd_norm', 'bwd_norm']);
+
+/** Legend-compat aliases of activity_sec_* on PPA roads — duplicates. */
+const ALIAS_FIELDS = new Set(['dwell_sec_min', 'dwell_sec_mid', 'dwell_sec_max']);
+
+const cleanAnalysisProperties = (
+  props: Record<string, unknown> | null | undefined,
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(props ?? {})) {
+    const renamed = ANALYSIS_RENAMES[key];
+    if (renamed) {
+      if (value != null && typeof value !== 'object') out[renamed] = value;
+      if (key === '_timestamp' && typeof value === 'number' && isFinite(value)) {
+        out.time_iso = new Date(value).toISOString();
+      }
+      continue;
+    }
+    if (key.startsWith('_')) continue;
+    if (VIS_ONLY_FIELDS.has(key) || ALIAS_FIELDS.has(key)) continue;
+    if (value !== null && typeof value === 'object') continue;
+    out[key] = value;
+  }
+  return out;
+};
+
+type CoordinateTree = number[] | CoordinateTree[];
+
+interface GeometryLike {
+  type: string;
+  coordinates?: CoordinateTree;
+  geometries?: GeometryLike[];
+}
+
+/** Drop the z coordinate from every vertex, at any nesting depth. */
+const dropZ = (coords: CoordinateTree): CoordinateTree =>
+  Array.isArray(coords[0])
+    ? (coords as CoordinateTree[]).map(dropZ)
+    : [(coords as number[])[0], (coords as number[])[1]];
+
+const geometryTo2D = (geometry: GeometryLike | null | undefined): GeometryLike | null | undefined => {
+  if (!geometry) return geometry;
+  if (geometry.type === 'GeometryCollection') {
+    return { ...geometry, geometries: (geometry.geometries ?? []).map(g => geometryTo2D(g)!) };
+  }
+  if (geometry.coordinates == null) return geometry;
+  return { ...geometry, coordinates: dropZ(geometry.coordinates) };
+};
+
+export interface AnalysisExportInfo {
+  /** Human-readable dataset name — written as the GDAL-style `name` member. */
+  label?: string;
+  /** The dataset's `_dataset_type` tag (or dataset id), for provenance. */
+  datasetType?: string;
+  /** Tool id that produced the result, for provenance. */
+  tool?: string;
+}
+
 /**
- * Export multiple datasets as a single GeoJSON FeatureCollection
+ * Convert a visualization dataset into an analysis-grade FeatureCollection:
+ * 2D WGS84 geometry + scalar analysis attributes only. The provenance info
+ * is written as top-level foreign members (RFC 7946 §6.1 — readers that do
+ * not know them ignore them).
  */
-export const exportMultipleDatasetsAsGeoJSON = (
-  datasets: FeatureCollection[],
-  filename?: string
+export const toAnalysisFeatureCollection = (
+  data: FeatureCollection,
+  info?: AnalysisExportInfo,
+): FeatureCollection => {
+  const fc: Record<string, unknown> = { type: 'FeatureCollection' };
+  if (info?.label) fc.name = info.label;
+  if (info?.datasetType) fc.dataset_type = info.datasetType;
+  if (info?.tool) fc.tool = info.tool;
+  fc.exported_at = new Date().toISOString();
+  fc.features = data.features.map((feature) => ({
+    type: 'Feature' as const,
+    geometry: geometryTo2D(feature.geometry as unknown as GeometryLike),
+    properties: cleanAnalysisProperties(feature.properties as Record<string, unknown>),
+  }));
+  return fc as unknown as FeatureCollection;
+};
+
+/**
+ * Download a dataset as analysis-grade GeoJSON (see toAnalysisFeatureCollection).
+ */
+export const exportAnalysisGeoJSON = (
+  data: FeatureCollection,
+  filename?: string,
+  info?: AnalysisExportInfo,
 ): void => {
-  // Merge all features into one collection
-  const mergedFeatures = datasets.flatMap((dataset) => dataset.features);
-
-  const mergedCollection: FeatureCollection = {
-    type: 'FeatureCollection',
-    features: mergedFeatures,
-  };
-
-  exportViewAsGeoJSON(mergedCollection, filename);
+  exportViewAsGeoJSON(toAnalysisFeatureCollection(data, info), filename);
 };
 
 /**

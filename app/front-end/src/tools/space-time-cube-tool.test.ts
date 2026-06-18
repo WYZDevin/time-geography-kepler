@@ -18,12 +18,43 @@ describe('SpaceTimeCubeTool', () => {
   it('returns option schema with showAxes and timeBreaks', () => {
     const schema = tool.getOptionSchema();
     const keys = schema.map(s => s.key);
+    expect(keys).toContain('cellSizeMeters');
     expect(keys).toContain('showAxes');
     expect(keys).toContain('timeBreaks');
   });
 
+  it('exposes time-slicing controls (count, method, duration, anchor)', () => {
+    const schema = tool.getOptionSchema();
+    const keys = schema.map(s => s.key);
+    expect(keys).toContain('timeSlices');
+    expect(keys).toContain('timeSliceMethod');
+    expect(keys).toContain('sliceDurationHours');
+    expect(keys).toContain('sliceAnchor');
+
+    const method = schema.find(s => s.key === 'timeSliceMethod');
+    expect(method?.options?.map(o => o.value)).toEqual([
+      'equal_interval',
+      'equal_count',
+      'fixed_duration',
+    ]);
+
+    // The method drives the rest: it comes first, and dependent controls only
+    // show for the methods they apply to.
+    expect(keys.indexOf('timeSliceMethod')).toBeLessThan(keys.indexOf('timeSlices'));
+    const count = schema.find(s => s.key === 'timeSlices');
+    expect(count?.visibleWhen).toEqual({
+      key: 'timeSliceMethod',
+      oneOf: ['equal_interval', 'equal_count'],
+    });
+    const duration = schema.find(s => s.key === 'sliceDurationHours');
+    expect(duration?.visibleWhen).toEqual({ key: 'timeSliceMethod', oneOf: ['fixed_duration'] });
+    expect(duration?.defaultValue).toBe(24); // meaningful default: daily slices
+    const anchor = schema.find(s => s.key === 'sliceAnchor');
+    expect(anchor?.type).toBe('datetime'); // native picker, no free-text parsing
+    expect(anchor?.visibleWhen).toEqual({ key: 'timeSliceMethod', oneOf: ['fixed_duration'] });
+  });
+
   it('throws when analyze() is called (backend-only stub)', async () => {
-    const data = { type: 'FeatureCollection' as const, features: [] };
-    await expect(tool.analyze(data, {})).rejects.toThrow('This tool requires backend execution');
+    await expect(tool.analyze()).rejects.toThrow('This tool requires backend execution');
   });
 });

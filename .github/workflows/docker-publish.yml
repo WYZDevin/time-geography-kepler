@@ -1,0 +1,72 @@
+name: Publish Docker images
+
+# Builds and pushes the frontend + backend images to Docker Hub.
+# Triggers on version tags (v1.2.3) or manually from the Actions tab.
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  Docker Hub account (also the image namespace)
+#   DOCKERHUB_TOKEN     Docker Hub access token (Account Settings → Security)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish"
+        required: false
+        default: "latest"
+
+env:
+  VITE_BACKEND_URL: ${{ vars.VITE_BACKEND_URL || 'http://localhost:8000' }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: app/back-end
+            image: time-geography-backend
+          - name: frontend
+            context: app/front-end
+            image: time-geography-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_BACKEND_URL=${{ env.VITE_BACKEND_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -410,14 +410,81 @@ export function buildDescriptorForDataset(
     };
   }
 
-  // --- Space-Time Cube exposure trajectory (true 3D line threading the cube
-  //     stack, coloured per-segment by environmental exposure) ---
+  // --- STKDE 2D spatial KDE ground projection (flat cells at Z=0, gradient-
+  //     coloured by raw density, ArcGIS-style) ---
+  if (dsType === 'stkde-ground') {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const f of dataset.features) {
+      const v = f.properties?.density;
+      if (typeof v === 'number') {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    return {
+      id: `${datasetId}-layer-${ts}`,
+      type: 'geojson',
+      datasetId,
+      label: 'STKDE 2D Density (Ground)',
+      isVisible: true,
+      opacity: 0.7,
+      color: COLORS.STKDE_95 as [number, number, number],
+      config: {
+        extruded: false,
+        filled: true,
+        stroked: false,
+        wireframe: false,
+        colorField: 'density',
+        colorDomain: [lo, hi],
+        // Low → high density: pale yellow → dark red, the classic KDE heat ramp
+        colorRange: ['#FFF5EB', '#FDD49E', '#FDBB84', '#FC8D59', '#E34A33', '#B30000'],
+      },
+    };
+  }
+
+  // --- Legacy STKDE per-confidence-level ground footprints (flat polygons at
+  //     Z=0; produced by the currently-disabled browser implementation) ---
+  if (dsType.startsWith('stkde-ground-')) {
+    const levelIndex = parseInt(dsType.split('-')[2] || '1', 10) - 1;
+    const levels = [
+      { color: COLORS.STKDE_90, opacity: 0.6, label: 'STKDE 90% (Ground)' },
+      { color: COLORS.STKDE_95, opacity: 0.8, label: 'STKDE 95% (Ground)' },
+      { color: COLORS.STKDE_99, opacity: 0.3, label: 'STKDE 99% (Ground)' },
+    ];
+    const level = levels[levelIndex] ?? levels[0];
+    return {
+      id: `${datasetId}-layer-${ts}`,
+      type: 'geojson',
+      datasetId,
+      label: level.label,
+      isVisible: true,
+      opacity: level.opacity,
+      color: level.color as [number, number, number],
+      config: {
+        renderAs: 'polygon',
+        extruded: false,
+        filled: true,
+        stroked: true,
+        wireframe: false,
+        // Coplanar fills at Z=0 across confidence levels would z-fight; disable
+        // depth testing so draw order decides and the ground stays flicker-free.
+        parameters: { depthTest: false },
+      },
+    };
+  }
+
+  // --- Space-Time Cube trajectory (true 3D line threading the cube stack;
+  //     coloured per-segment by environmental exposure when env data is
+  //     present, otherwise drawn in the default trajectory colour) ---
   if (dsType === 'stc-trajectory') {
+    const hasExposure = dataset.features.some(f => f.properties?.env_exposure != null);
     return {
       id: `${datasetId}-layer-${ts}`,
       type: 'line',
       datasetId,
-      label: 'Trajectory Exposure',
+      label: hasExposure ? 'Trajectory Exposure' : '3D Trajectory',
       isVisible: true,
       opacity: 1,
       color: [255, 165, 0],
@@ -463,6 +530,43 @@ export function buildDescriptorForDataset(
         wireframe: false,
         heightField: PROCESSED_HEIGHT_FIELD,
         elevationScale: 1,
+        colorField,
+        colorDomain: [lo, hi],
+        colorRange: hasEnv
+          ? ['#2166ac', '#4393c3', '#92c5de', '#fddbc7', '#f4a582', '#d6604d', '#b2182b']
+          : ['#edf8fb', '#b2e2e2', '#66c2a4', '#2ca25f', '#006d2c'],
+      },
+    };
+  }
+
+  // --- Space-Time Cube 2D ground projection (flat polygons at Z=0, aggregated
+  //     over time, coloured by exposure when present else by total count) ---
+  if (dsType === 'stc-ground') {
+    const hasEnv = dataset.features.some(f => f.properties?.env_value != null);
+    const colorField = hasEnv ? 'env_value' : 'count';
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const f of dataset.features) {
+      const v = f.properties?.[colorField];
+      if (typeof v === 'number') {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    return {
+      id: `${datasetId}-layer-${ts}`,
+      type: 'geojson',
+      datasetId,
+      label: 'Space-Time Cube (Ground)',
+      isVisible: true,
+      opacity: 0.7,
+      color: COLORS.AQUARIUM as [number, number, number],
+      config: {
+        extruded: false,
+        filled: true,
+        stroked: true,
+        wireframe: false,
         colorField,
         colorDomain: [lo, hi],
         colorRange: hasEnv
@@ -551,45 +655,84 @@ export function buildDescriptorForDataset(
   }
 
   // --- PPA road network (per-GPS-point reachable roads, stacked 3D by time) ---
-  // Use a LineLayer with explicit [lng, lat, z] source/target positions so the
-  // 3D rendering follows the GPS trajectory's altitude.  Each segment carries
-  // its own colour_rgba pre-computed on the backend from dwell_sec_min.
+  // Render each reachable road edge as a continuous PathLayer path (rounded
+  // joints/caps) so adjacent edges read as a connected road surface instead of
+  // dashed segments. The geometry is uploaded once and a GPU two-cone time
+  // filter (see buildPathLayer) animates which edges are reachable at each
+  // moment, keeping time-scrubbing smooth. Each path carries its own
+  // colour_rgba pre-computed on the backend from dwell_sec_min.
   if (dsType === 'ppa-road-network') {
     return {
       id: `${datasetId}-layer-${ts}`,
-      type: 'line',
+      type: 'path',
       datasetId,
       label: 'PPA Reachable Roads',
       isVisible: true,
       opacity: 0.9,
       color: [220, 90, 60],
       config: {
-        segmentData: buildLineSegmentsFromLineFeatures(dataset),
-        widthScale: 2,
+        pathData: buildPpaPathsFromLineFeatures(dataset),
+        widthScale: 4,
+        widthMinPixels: 2,
+        timeFilter2D: true,
+        // The prism is lifted to "time" altitude (often many km up), where the
+        // depth buffer loses precision and Chrome's ANGLE pipeline depth-culls
+        // the lines entirely (they render in Firefox's native GL). Drawing
+        // without depth-testing makes them appear in both browsers.
+        depthTest: false,
       },
     };
   }
 
-  // --- PPA road network ground projection (same segments flattened to z=0) ---
+  // --- PPA road network ground projection (same paths flattened to z=0) ---
   // Reads like a "shadow" of the stacked 3D PPA layer — same shape on the
   // basemap so users can see road coverage without the depth-cue clutter.
+  // Animates in sync with the 3D layer via the same GPU two-cone filter.
   if (dsType === 'ppa-road-network-ground') {
-    const groundSegments = buildLineSegmentsFromLineFeatures(dataset).map(s => ({
-      ...s,
-      source: [s.source[0], s.source[1], 0] as [number, number, number],
-      target: [s.target[0], s.target[1], 0] as [number, number, number],
-    }));
     return {
       id: `${datasetId}-layer-${ts}`,
-      type: 'line',
+      type: 'path',
       datasetId,
       label: 'PPA Reachable Roads (Ground)',
       isVisible: true,
       opacity: 0.55,
       color: [120, 60, 40],
       config: {
-        segmentData: groundSegments,
-        widthScale: 1.25,
+        pathData: buildPpaPathsFromLineFeatures(dataset, true),
+        widthScale: 2.5,
+        widthMinPixels: 1,
+        timeFilter2D: true,
+        depthTest: false,
+      },
+    };
+  }
+
+  // --- PPA dwell surface (flat H3 cells, colored by available activity time) ---
+  // The default main-map reading of the network prism: where the subject could
+  // have been AND how long they could have stayed there. Same blue→red ramp as
+  // the backend's per-edge color_rgba, so the roads and the surface agree.
+  if (dsType === 'ppa-dwell-surface') {
+    const maxDwell = dataset.features.reduce((max, feature) => {
+      const value = feature.properties?.dwell_minutes;
+      return typeof value === 'number' ? Math.max(max, value) : max;
+    }, 0);
+
+    return {
+      id: `${datasetId}-layer-${ts}`,
+      type: 'geojson',
+      datasetId,
+      label: 'Potential Dwell Time Surface',
+      isVisible: true,
+      opacity: 0.55,
+      color: [44, 123, 182],
+      config: {
+        extruded: false,
+        filled: true,
+        stroked: false,
+        colorField: 'dwell_minutes',
+        colorDomain: [0, maxDwell],
+        colorRange: ['#2C7BB6', '#ABD9E9', '#FFFFBF', '#FDAE61', '#D7191C'],
+        parameters: { depthTest: false },
       },
     };
   }
@@ -825,6 +968,145 @@ function buildLineSegmentsFromLineStrings(
   }
 
   return segments;
+}
+
+/**
+ * Build continuous PathLayer paths from the PPA road-network LineString edges.
+ * Each edge becomes one path with its vertices lifted to time-height (or
+ * flattened to the ground for the shadow layer). Forward/backward travel times
+ * are normalised to [0,1] against the A→B budget and attached as fwd_norm /
+ * bwd_norm so the GPU two-cone time filter can reveal the reachable slice at
+ * any animation time t (fwd ≤ t AND bwd ≤ 1−t).
+ */
+function buildPpaPathsFromLineFeatures(
+  dataset: GeoJSON.FeatureCollection,
+  flattenToGround = false,
+): { path: [number, number, number][]; properties: Record<string, unknown> }[] {
+  const paths: { path: [number, number, number][]; properties: Record<string, unknown> }[] = [];
+
+  const addPath = (coords: number[][], properties: Record<string, unknown>) => {
+    const z = (properties[PROCESSED_HEIGHT_FIELD] as number) ?? null;
+    const budget = (properties.total_budget_sec as number) || 0;
+    const fwd = (properties.forward_sec as number) ?? 0;
+    const bwd = (properties.backward_sec as number) ?? 0;
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+    const fwd_norm = budget > 0 ? clamp01(fwd / budget) : 0;
+    const bwd_norm = budget > 0 ? clamp01(bwd / budget) : 0;
+    const path = coords.map(
+      c => [c[0], c[1], flattenToGround ? 0 : (z ?? c[2] ?? 0)] as [number, number, number],
+    );
+    paths.push({ path, properties: { ...properties, fwd_norm, bwd_norm } });
+  };
+
+  for (const f of dataset.features) {
+    const properties = f.properties ?? {};
+    if (f.geometry?.type === 'LineString') {
+      addPath((f.geometry as GeoJSON.LineString).coordinates, properties);
+    } else if (f.geometry?.type === 'MultiLineString') {
+      for (const coords of (f.geometry as GeoJSON.MultiLineString).coordinates) {
+        addPath(coords, properties);
+      }
+    }
+  }
+
+  return paths;
+}
+
+/**
+ * Discrete space-time prism sheets for the regular map view — the same
+ * forward∩backward cone slicing the Focused 3D View draws (see
+ * prism-illustration.tsx slicePaths), but at the map's ORIGINAL z scale:
+ * sheet i sits at z = zStart + frac·(zEnd − zStart), so the prism stays
+ * aligned with the trajectory's time axis instead of being re-stretched.
+ *
+ * An edge appears on sheet i (elapsed time τ = frac·T) when it lies in both
+ * cones: reachable from A by then (forward_sec ≤ τ) and still able to make B
+ * on time (backward_sec ≤ T − τ). Edges lacking travel times fall back to the
+ * single sheet nearest their time-window midpoint. The sheet count is capped
+ * so edges × sheets stays bounded on large networks.
+ */
+export function buildPrismSheetPaths(
+  roads: GeoJSON.FeatureCollection,
+  zStart: number,
+  zEnd: number,
+  desiredSlices: number,
+): {
+  paths: { path: [number, number, number][]; properties: Record<string, unknown> }[];
+  nSlices: number;
+} {
+  const num = (v: unknown): number | null => (typeof v === 'number' && isFinite(v) ? v : null);
+
+  type SheetEdge = {
+    coords: number[][];
+    props: Record<string, unknown>;
+    da: number | null;
+    db: number | null;
+    tp: number;
+  };
+  const edges: SheetEdge[] = [];
+  let T = 0;
+  for (const f of roads.features) {
+    if (f.geometry?.type !== 'LineString') continue;
+    const props = f.properties ?? {};
+    const da = num(props.forward_sec);
+    const db = num(props.backward_sec);
+    const t = num(props.total_budget_sec);
+    if (t != null && t > 0) T = t;
+    // Outside the two-cone intersection — on no A→B path within the budget.
+    if (da != null && db != null && t != null && t > 0 && da + db > t + 1e-6) continue;
+    edges.push({
+      coords: (f.geometry as GeoJSON.LineString).coordinates,
+      props,
+      da,
+      db,
+      tp: num(props._time_progress) ?? 0.5,
+    });
+  }
+  if (edges.length === 0) return { paths: [], nSlices: 0 };
+
+  type SheetPath = { path: [number, number, number][]; properties: Record<string, unknown> };
+  const buildAt = (n: number): SheetPath[] => {
+    const out: SheetPath[] = [];
+    for (const e of edges) {
+      for (let i = 0; i < n; i++) {
+        const frac = n > 1 ? i / (n - 1) : 1;
+        const tau = frac * T;
+        const inSheet = e.da != null && e.db != null && T > 0
+          ? e.da <= tau + 1e-6 && e.db <= T - tau + 1e-6
+          : Math.round(e.tp * (n - 1)) === i;
+        if (!inSheet) continue;
+        const z = zStart + frac * (zEnd - zStart);
+        out.push({
+          path: e.coords.map(c => [c[0], c[1], z] as [number, number, number]),
+          properties: { ...e.props, _sheet_frac: frac, [PROCESSED_TIME_FIELD]: frac },
+        });
+      }
+    }
+    return out;
+  };
+
+  // Budget on the ACTUAL rendered sheet count, not the edges × nSlices worst
+  // case. The two-cone filter keeps most edges out of most slices, so the real
+  // total runs well below that product. The old worst-case bound silently
+  // collapsed dense networks (~28k edges → floor(300k/28k) ≈ 10 slices) no
+  // matter how many the user requested; honor the request and step down only
+  // if the rendered total actually overflows the budget.
+  const MAX_RENDERED_PATHS = 300_000;
+  let nSlices = Math.max(2, desiredSlices);
+  let paths = buildAt(nSlices);
+  while (paths.length > MAX_RENDERED_PATHS && nSlices > 2) {
+    const fit = Math.floor(nSlices * (MAX_RENDERED_PATHS / paths.length));
+    nSlices = Math.max(2, Math.min(nSlices - 1, fit));
+    paths = buildAt(nSlices);
+  }
+  if (nSlices < desiredSlices) {
+    console.warn(
+      `buildPrismSheetPaths: clamped ${desiredSlices} → ${nSlices} time slices to stay ` +
+      `under ${MAX_RENDERED_PATHS.toLocaleString()} rendered sheet paths ` +
+      `(${edges.length.toLocaleString()} reachable edges).`,
+    );
+  }
+  return { paths, nSlices };
 }
 
 function buildLineSegmentsFromLineFeatures(

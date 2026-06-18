@@ -1,6 +1,7 @@
 """Standalone functions for interactive and anchor-based prism execution."""
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 import geopandas as gpd
@@ -10,7 +11,9 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 
 from ...constants import PROCESSED_HEIGHT_FIELD
+from .network_prism import execute_network_anchor_prism
 from .road_network import _parse_timestamps
+from .timing import log_phase
 from .utils import (
     SPEED_PRESETS,
     _anchor_label,
@@ -45,6 +48,7 @@ def execute_interactive_prism(
         time_field = attributes.get("time") if attributes else None
         return execute_anchor_prism(anchor_a, anchor_b, options, gdf=gdf, time_field=time_field)
 
+    _t = perf_counter()
     time_field = attributes.get("time")
     if not time_field or time_field not in gdf.columns:
         raise ValueError(f"Time attribute '{time_field}' not found in data")
@@ -52,8 +56,14 @@ def execute_interactive_prism(
     if not all(gdf.geometry.geom_type == "Point"):
         raise ValueError("Space-Time Prism requires Point geometries")
 
-    # Parse timestamps and sort
-    timestamps = pd.to_datetime(gdf[time_field])
+    # Parse timestamps and sort. format="mixed" infers per element so files
+    # mixing string formats (e.g. "11/4/2022 0:07" and "2022-09-15 00:02:35")
+    # parse; numeric columns keep the default path.
+    time_col = gdf[time_field]
+    if pd.api.types.is_numeric_dtype(time_col):
+        timestamps = pd.to_datetime(time_col)
+    else:
+        timestamps = pd.to_datetime(time_col, format="mixed")
     if hasattr(timestamps.dt, "tz") and timestamps.dt.tz is not None:
         timestamps = timestamps.dt.tz_localize(None)
     epoch_ms = timestamps.astype("datetime64[ms]").astype(np.int64).values
@@ -83,6 +93,7 @@ def execute_interactive_prism(
 
     # Identify meaningful anchors (skip dense GPS pings)
     anchors = _identify_anchors(coords_x, coords_y, epoch_ms, n)
+    _t = log_phase(f"interactive-prism: parse + sort {n} points", _t)
 
     prism_rows = []
     ppa_polys = []
@@ -142,6 +153,10 @@ def execute_interactive_prism(
 
             if show_ppa:
                 ppa_polys.append(cross)
+
+    _t = log_phase(
+        f"interactive-prism: slice loop ({feasible} feasible segments, {len(prism_rows)} slices)", _t,
+    )
 
     outputs = []
 
@@ -219,6 +234,7 @@ def execute_interactive_prism(
     anchor_gdf = gpd.GeoDataFrame(anchor_rows, crs="EPSG:4326")
     outputs.append(anchor_gdf)
 
+    log_phase("interactive-prism: build trajectory/PPA/anchor outputs", _t)
     return outputs
 
 
@@ -335,21 +351,24 @@ def execute_anchor_prism(
     if prism_mode == "gps-road-network":
         # Two-anchor network prism: forward Dijkstra from A + backward from B,
         # intersected where travel(A→x) + travel(x→B) + activity ≤ T. The Z
-        # scale is passed through so slices line up with the trajectory height.
-        from .network_prism import execute_network_anchor_prism
-
+        # scale is passed through so the prism lines up with the trajectory height.
         return execute_network_anchor_prism(
             p1, p2, options,
             z_start=z_start, z_end=z_end, total_height=total_height,
+            trajectory_gdf=gdf, time_field=time_field,
         )
     elif prism_mode == "network":
+        _t = perf_counter()
         prism_rows, ppa_polys = _network_anchor_prism_rows(
             p1, p2, speed_ms, dt_s, num_slices, prism_height, slice_height, show_ppa, z_start
         )
+        _t = log_phase(f"anchor-prism: network geometry ({len(prism_rows)} slices)", _t)
     else:
+        _t = perf_counter()
         prism_rows, ppa_polys = _euclidean_anchor_prism_rows(
             p1, p2, speed_ms, dt_s, num_slices, prism_height, slice_height, show_ppa, z_start
         )
+        _t = log_phase(f"anchor-prism: euclidean geometry ({len(prism_rows)} slices)", _t)
 
     outputs = []
     if prism_rows:
@@ -424,4 +443,5 @@ def execute_anchor_prism(
 
     if not outputs:
         raise ValueError("No prism could be computed for the selected anchors")
+    log_phase("anchor-prism: build trajectory/PPA/anchor outputs", _t)
     return outputs

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../../../stores/store';
 import { setToolOptions, setSelectedDataSource, setFieldMapping, setExecutionMode, proceedToVisualization } from '../../../stores/workflow-slice';
@@ -7,12 +7,14 @@ import { useResolvedCapabilities } from '@/services/execution-resolver';
 import { Button } from '../../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../../ui/tooltip';
 import { DatasetSelector } from '../../dataset-selector';
 import { FeatureCollection } from '../../../interfaces/data-interfaces';
 import { AttributeMapping } from '../../../interfaces/attribute-mapping';
 import { extractFieldNames } from '../../../utils/data-utils';
 import { autoDetectFields } from '../../../utils/field-auto-detection';
 import { toolRegistry } from '../../../utils/tool-registry';
+import { estimateAutoCellSizeMeters } from '@/data-processors/stkde';
 import {
     Settings,
     ArrowRight,
@@ -24,6 +26,7 @@ import {
     Server,
     AlertTriangle,
     Clock,
+    Info,
 } from 'lucide-react';
 
 const PRISM_PASTA_OPTIONS = new Set([
@@ -58,6 +61,42 @@ const PRISM_INTERACTIVE_OPTIONS = new Set([
     'timeBreaks',
 ]);
 
+// Info icon that reveals an option's description on hover/focus. Replaces the
+// old helper-text paragraph so labels stay compact.
+const InfoTooltip = ({ text }: { text: string }) => (
+    <Tooltip>
+        <TooltipTrigger asChild>
+            <button
+                type="button"
+                tabIndex={-1}
+                aria-label="More information"
+                onClick={(e) => e.preventDefault()}
+                className="inline-flex text-gray-400 transition-colors hover:text-gray-600"
+            >
+                <Info className="w-3.5 h-3.5" />
+            </button>
+        </TooltipTrigger>
+        <TooltipContent>{text}</TooltipContent>
+    </Tooltip>
+);
+
+// Group options by their `group` field, preserving first-appearance order of
+// both groups and the options within each. Untagged options collapse into a
+// single leading headerless section.
+const groupOptions = <T extends { group?: string }>(options: T[]) => {
+    const order: string[] = [];
+    const byGroup = new Map<string, T[]>();
+    options.forEach(opt => {
+        const group = opt.group ?? '';
+        if (!byGroup.has(group)) {
+            byGroup.set(group, []);
+            order.push(group);
+        }
+        byGroup.get(group)!.push(opt);
+    });
+    return order.map(group => ({ group, items: byGroup.get(group)! }));
+};
+
 const UnifiedToolOptionsStep = () => {
     const dispatch = useDispatch();
     const { selectedToolId, selectedDataSourceId } = useSelector((state: RootState) => state.workflow);
@@ -72,6 +111,17 @@ const UnifiedToolOptionsStep = () => {
     const executionMode = useSelector((state: RootState) => state.workflow.executionMode);
 
     const [dataSourceDialogOpen, setDataSourceDialogOpen] = useState(false);
+
+    // STKDE/STC: what cell size (meters) auto-detection would pick for the
+    // selected dataset, shown as a hint under the Grid Cell Size input.
+    const autoCellSizeMeters = useMemo(() => {
+        if ((selectedToolId !== 'stkde' && selectedToolId !== 'space-time-cube') || !selectedDataSource?.data) return null;
+        try {
+            return estimateAutoCellSizeMeters(selectedDataSource.data as GeoJSON.FeatureCollection);
+        } catch {
+            return null;
+        }
+    }, [selectedToolId, selectedDataSource]);
 
     const [options, setOptions] = useState<Record<string, unknown>>({});
     const [mapping, setMapping] = useState<AttributeMapping>({
@@ -194,24 +244,31 @@ const UnifiedToolOptionsStep = () => {
     const renderOptionInput = (option: any) => { // Generic since ToolOption is not available
         const value = options[option.key] ?? option.defaultValue;
         const stringValue = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+        // Hint shown when an unmet `requires` dependency disables this option
+        // (null when the option is enabled).
+        const requiresHint = requiresUnmet(option);
 
         switch (option.type) {
             case 'boolean':
                 return (
-                    <div key={option.key} className="flex items-center justify-between p-3 border rounded-lg">
+                    <div key={option.key} className={`flex items-center justify-between p-3 border rounded-lg ${requiresHint ? 'opacity-60' : ''}`}>
                         <div>
-                            <label className="text-sm font-medium text-gray-700">
+                            <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
                                 {option.label}
+                                {option.description && <InfoTooltip text={option.description} />}
                             </label>
-                            {option.description && (
-                                <p className="text-xs text-gray-500 mt-1">{option.description}</p>
+                            {requiresHint ? (
+                                <p className="text-xs text-amber-600 italic mt-0.5">{requiresHint}</p>
+                            ) : option.note && (
+                                <p className="text-xs text-gray-400 italic mt-0.5">{option.note}</p>
                             )}
                         </div>
                         <input
                             type="checkbox"
-                            checked={Boolean(value)}
+                            checked={Boolean(value) && !requiresHint}
+                            disabled={!!requiresHint}
                             onChange={(e) => handleOptionChange(option.key, e.target.checked)}
-                            className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                            className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
                         />
                     </div>
                 );
@@ -219,25 +276,34 @@ const UnifiedToolOptionsStep = () => {
             case 'number': {
                 const numOption = option as any;
                 return (
-                    <div key={option.key} className="p-3 border rounded-lg">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <div key={option.key} className={`p-3 border rounded-lg ${requiresHint ? 'opacity-60' : ''}`}>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
                             {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
                         </label>
-                        {option.description && (
-                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
+                        {requiresHint && (
+                            <p className="text-xs text-amber-600 italic mb-2 -mt-1">{requiresHint}</p>
                         )}
                         <input
                             type="number"
                             value={Number(value ?? numOption.defaultValue ?? 0)}
+                            disabled={!!requiresHint}
                             onChange={(e) => {
                                 const newValue = parseFloat(e.target.value);
                                 handleOptionChange(option.key, isNaN(newValue) ? 0 : newValue);
                             }}
-                            className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100"
                             min={numOption.min}
                             max={numOption.max}
                             step={numOption.step || 1}
                         />
+                        {option.key === 'cellSizeMeters' && autoCellSizeMeters != null && (
+                            <p className="text-xs text-blue-600 mt-1">
+                                Auto-detect (0) uses ≈ {autoCellSizeMeters >= 10
+                                    ? Math.round(autoCellSizeMeters).toLocaleString()
+                                    : autoCellSizeMeters.toFixed(1)} m for this dataset
+                            </p>
+                        )}
                     </div>
                 );
             }
@@ -245,15 +311,30 @@ const UnifiedToolOptionsStep = () => {
             case 'string':
                 return (
                     <div key={option.key} className="p-3 border rounded-lg">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
                             {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
                         </label>
-                        {option.description && (
-                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
-                        )}
                         <input
                             type="text"
                             value={stringValue || String(option.defaultValue ?? '')}
+                            onChange={(e) => handleOptionChange(option.key, e.target.value)}
+                            className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                    </div>
+                );
+
+            case 'datetime':
+                // Native picker: no free-text date parsing, no format ambiguity.
+                return (
+                    <div key={option.key} className="p-3 border rounded-lg">
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
+                            {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
+                        </label>
+                        <input
+                            type="datetime-local"
+                            value={stringValue}
                             onChange={(e) => handleOptionChange(option.key, e.target.value)}
                             className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         />
@@ -264,12 +345,10 @@ const UnifiedToolOptionsStep = () => {
                 const selectOption = option as any;
                 return (
                     <div key={option.key} className="p-3 border rounded-lg">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
                             {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
                         </label>
-                        {option.description && (
-                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
-                        )}
                         <select
                             value={stringValue || String(selectOption.defaultValue ?? '')}
                             onChange={(e) => handleOptionChange(option.key, e.target.value)}
@@ -289,12 +368,10 @@ const UnifiedToolOptionsStep = () => {
                 const datasetOption = option as any;
                 return (
                     <div key={option.key} className="p-3 border rounded-lg">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
                             {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
                         </label>
-                        {option.description && (
-                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
-                        )}
                         <DatasetSelector
                             value={typeof value === 'string' ? value : ''}
                             onChange={(datasetId) => {
@@ -317,13 +394,11 @@ const UnifiedToolOptionsStep = () => {
                 return (
                     <div key={option.key} className="space-y-3">
                         <div className="p-3 border rounded-lg bg-blue-50 border-blue-200">
-                            <label className="block text-sm font-medium text-blue-800 mb-2">
+                            <label className="flex items-center gap-1.5 text-sm font-medium text-blue-800 mb-2">
                                 {option.label}
-                                {primaryDatasetOption.required && <span className="text-red-500 ml-1">*</span>}
+                                {primaryDatasetOption.required && <span className="text-red-500">*</span>}
+                                {option.description && <InfoTooltip text={option.description} />}
                             </label>
-                            {option.description && (
-                                <p className="text-xs text-blue-700 mb-2">{option.description}</p>
-                            )}
                             <DatasetSelector
                                 value={typeof value === 'string' ? value : ''}
                                 onChange={(datasetId) => {
@@ -388,20 +463,24 @@ const UnifiedToolOptionsStep = () => {
                 }
                 const emptyMsg = srcKey ? 'Select an environment dataset first' : 'Select a data source first';
                 return (
-                    <div key={option.key} className="p-3 border rounded-lg">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <div key={option.key} className={`p-3 border rounded-lg ${requiresHint ? 'opacity-60' : ''}`}>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
                             {option.label}
+                            {option.description && <InfoTooltip text={option.description} />}
                         </label>
-                        {option.description && (
-                            <p className="text-xs text-gray-500 mb-2">{option.description}</p>
+                        {requiresHint ? (
+                            <p className="text-xs text-amber-600 italic mb-2 -mt-1">{requiresHint}</p>
+                        ) : option.note && (
+                            <p className="text-xs text-gray-400 italic mb-2 -mt-1">{option.note}</p>
                         )}
                         {dataFields.length === 0 ? (
                             <p className="text-xs text-gray-400 italic">{emptyMsg}</p>
                         ) : (
                             <select
                                 value={stringValue}
+                                disabled={!!requiresHint}
                                 onChange={(e) => handleOptionChange(option.key, e.target.value)}
-                                className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100"
                             >
                                 <option value="">-- None --</option>
                                 {dataFields.map(name => (
@@ -491,7 +570,30 @@ const UnifiedToolOptionsStep = () => {
     const prismAnalysisMode = selectedTool.id === 'space-time-prism'
         ? ((options.analysisMode as string | undefined) ?? 'pasta')
         : null;
-    const toolOptions = selectedTool.id === 'space-time-prism'
+    // Schema-driven conditional visibility: hide options whose visibleWhen
+    // condition doesn't match the current value (or default, before the
+    // options state is initialized) of the option they depend on.
+    const visibleWhenSatisfied = (option: (typeof rawToolOptions)[number]) => {
+        const cond = option.visibleWhen;
+        if (!cond) return true;
+        const dep = rawToolOptions.find(o => o.key === cond.key);
+        const current = options[cond.key] ?? dep?.defaultValue;
+        return cond.oneOf.includes(current);
+    };
+    // Schema-driven enable/disable: an option with `requires` stays disabled
+    // until the option it points at holds a truthy / non-empty value. Returns a
+    // short hint to show while disabled, or null when the option is enabled.
+    const requiresUnmet = (option: (typeof rawToolOptions)[number]) => {
+        const reqKey = option.requires;
+        if (!reqKey) return null;
+        const dep = rawToolOptions.find(o => o.key === reqKey);
+        const current = options[reqKey] ?? dep?.defaultValue;
+        const satisfied = typeof current === 'string' ? current.trim() !== '' : Boolean(current);
+        if (satisfied) return null;
+        const label = dep?.label ?? reqKey;
+        return dep?.type === 'boolean' ? `Enable "${label}" first` : `Select a ${label} first`;
+    };
+    const toolOptions = (selectedTool.id === 'space-time-prism'
         ? rawToolOptions.filter(option => {
             const visible = (prismAnalysisMode === 'interactive' ? PRISM_INTERACTIVE_OPTIONS : PRISM_PASTA_OPTIONS).has(option.key);
             if (!visible) return false;
@@ -499,12 +601,14 @@ const UnifiedToolOptionsStep = () => {
             if (option.key === 'maxVoxels' && options.showVoxels === false) return false;
             return true;
         })
-        : rawToolOptions;
+        : rawToolOptions
+    ).filter(visibleWhenSatisfied);
     const effectiveExecutionMode = selectedTool.id === 'space-time-prism'
         ? (prismAnalysisMode === 'interactive' ? (caps.canRunBackend ? 'backend' : 'frontend') : 'backend')
         : (executionMode ?? caps.defaultMode);
 
     return (
+        <TooltipProvider delayDuration={200}>
         <div className="h-full flex flex-col p-6 overflow-auto space-y-6">
             {/* Header */}
             <div className="flex items-center gap-3">
@@ -725,8 +829,17 @@ const UnifiedToolOptionsStep = () => {
                             Configure tool-specific parameters
                         </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-3">
-                        {toolOptions.map((option) => renderOptionInput(option))}
+                    <CardContent className="space-y-5">
+                        {groupOptions(toolOptions).map(({ group, items }) => (
+                            <div key={group || '_ungrouped'} className="space-y-3">
+                                {group && (
+                                    <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                        {group}
+                                    </h4>
+                                )}
+                                {items.map((option) => renderOptionInput(option))}
+                            </div>
+                        ))}
                     </CardContent>
                 </Card>
             )}
@@ -746,6 +859,7 @@ const UnifiedToolOptionsStep = () => {
                 </Button>
             </div>
         </div>
+        </TooltipProvider>
     );
 };
 

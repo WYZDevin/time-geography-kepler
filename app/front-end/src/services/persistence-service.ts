@@ -8,11 +8,15 @@
  */
 
 import { DataSource } from '../stores/data-slice';
+import { FeatureCollection } from '../interfaces/data-interfaces';
 
 // Keys (shared between the IndexedDB store and the legacy localStorage layer
 // we migrate away from).
 const STORAGE_KEY_PREFIX = 'time-geography-kepler';
 const DATA_SOURCES_KEY = `${STORAGE_KEY_PREFIX}:data-sources`;
+// Large-file payloads are stored one-per-key (not inside DATA_SOURCES_KEY) so
+// the project blob stays small and immer never walks them.
+const LARGE_FILE_PREFIX = `${STORAGE_KEY_PREFIX}:large-file:`;
 const SELECTED_IDS_KEY = `${STORAGE_KEY_PREFIX}:selected-ids`;
 const VERSION_KEY = `${STORAGE_KEY_PREFIX}:version`;
 const CURRENT_VERSION = '1.0.0';
@@ -153,6 +157,35 @@ export const saveProject = async (
     }
     throw error instanceof Error ? error : new Error('Failed to save project');
   }
+};
+
+/**
+ * Persist a large-file payload (the full GeoJSON kept out of Redux) so it
+ * survives a page reload. Stored under its own key, keyed by dataset id.
+ */
+export const saveLargeFile = async (id: string, data: FeatureCollection): Promise<void> => {
+  try {
+    await idbSetMany([[LARGE_FILE_PREFIX + id, data]]);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      throw new Error('Storage quota exceeded. Please remove some data sources.');
+    }
+    throw error instanceof Error ? error : new Error('Failed to save dataset');
+  }
+};
+
+/**
+ * Load a persisted large-file payload by dataset id (undefined if absent).
+ */
+export const loadLargeFile = async (id: string): Promise<FeatureCollection | undefined> => {
+  return idbGet<FeatureCollection>(LARGE_FILE_PREFIX + id);
+};
+
+/**
+ * Remove a persisted large-file payload by dataset id.
+ */
+export const deleteLargeFileFromDB = async (id: string): Promise<void> => {
+  await idbDelete([LARGE_FILE_PREFIX + id]);
 };
 
 /**

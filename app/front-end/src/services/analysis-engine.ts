@@ -4,7 +4,7 @@ import { AttributeMapping } from '@/interfaces/attribute-mapping';
 import { toolRegistry } from '@/utils/tool-registry';
 import { backendApiService } from './backend-api-service';
 import { normalizeBackendResponse } from './backend-normalizer';
-import { getLargeFile } from './large-file-cache';
+import { ensureLargeFile } from './large-file-cache';
 import * as turf from '@turf/turf';
 
 export interface AnalysisRequest {
@@ -14,6 +14,8 @@ export interface AnalysisRequest {
   attributes?: AttributeMapping;
   sourceDatasetIds?: string[];
   mode?: ExecutionMode;
+  /** Optional polygon to clip backend output to (applied on the backend). */
+  researchArea?: FeatureCollection;
 }
 
 export interface AnalysisResult {
@@ -67,7 +69,7 @@ export class AnalysisEngine {
           // Prefer cache lookup (large files); fall back to inline data (small files,
           // kept for backwards compatibility).
           const envData: FeatureCollection | undefined =
-            (envDatasetId ? getLargeFile(envDatasetId) : undefined) ??
+            (envDatasetId ? await ensureLargeFile(envDatasetId) : undefined) ??
             (backendOptions.envDatasetData as FeatureCollection | undefined);
 
           if (envData && envData.features.length > 0) {
@@ -109,6 +111,7 @@ export class AnalysisEngine {
           backendOptions,
           request.attributes as Record<string, any> | undefined,
           request.sourceDatasetIds,
+          request.researchArea,
         );
         if (!raw || !raw.success) {
           return {

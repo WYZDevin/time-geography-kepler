@@ -10,15 +10,15 @@ Every record needs, at minimum:
 | Field | Meaning |
 |-------|---------|
 | Geometry / lon-lat | The location of the observation (a `Point`) |
-| A timestamp column | When the observation was recorded |
+| A timestamp column | When the observation was recorded in UTC format |
 
 Optional columns unlock extra features:
 
-| Column | Used by |
+| Column | Used for |
 |--------|---------|
-| A user / trajectory ID | "Align Start Times" on 3D Trajectory, STKDE, Space-Time Cube |
-| A stay/location label | Stay-point visualization on 3D Trajectory |
-| An environmental indicator | Exposure coloring on the Space-Time Cube |
+| A user / trajectory ID |If the data contains multiple user's data, you'll need a column to help the tool identify each user's trajectory rather than mixing them into single trajectory |
+| A stay/location label | Each GPS point  may have a label identifying which stay this gps belongs to. This can be used to cluster the trajectory points into stays |
+| An environmental indicator | Exploring the exposure of the trajectory to the enviroment. |
 
 ## GeoJSON
 
@@ -62,19 +62,6 @@ The timestamp column is mapped explicitly when you configure a tool (the
 - Space-separated — `2022-09-16 00:09:07`
 - US-style — `11/4/2022 0:07`
 - Unix epoch — seconds or milliseconds
-
-::: tip Mixed formats are handled
-Real-world exports often mix formats within a single file. The Space-Time Cube
-backend parses each row individually, so a file containing both
-`11/4/2022 0:07` and `2022-09-16 00:09:07` still loads cleanly.
-:::
-
-## Large files
-
-Datasets **larger than 50 MB** are kept in an in-browser cache instead of app
-state, so a 100 MB+ environmental grid won't freeze the UI. Smaller files are
-held in the app's normal data store. Either way, only the data a tool actually
-needs is sent to the backend.
 
 ## Sample datasets
 

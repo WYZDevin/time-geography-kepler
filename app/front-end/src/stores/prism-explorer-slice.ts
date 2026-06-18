@@ -16,6 +16,14 @@ export interface PrismParams {
   roadNetworkDatasetId: string;
   h3Resolution: number;
   minActivityMinutes: number;
+  /**
+   * Realistic-speed adjustment (road-network prism): 'off' = free-flow profile
+   * speeds; 'auto' = calibrate from the GPS trajectory (fallback: time-of-day
+   * congestion factor); 'manual' = multiply speeds by speedFactor.
+   */
+  speedAdjustment: 'off' | 'auto' | 'manual';
+  /** Real speed = factor × profile speed (used when speedAdjustment='manual'). */
+  speedFactor: number;
   // PPA road-network mode (gps-road-network):
   // T (totalBudgetMinutes) — total time budget per GPS origin
   // A (minActivityMinutes) — reused above; minimum activity time at destination
@@ -62,6 +70,8 @@ const initialState: PrismExplorerState = {
     roadNetworkDatasetId: '',
     h3Resolution: 9,
     minActivityMinutes: 5,
+    speedAdjustment: 'off',
+    speedFactor: 0.7,
     totalBudgetMinutes: 30,
     maxOrigins: 30,
     clusterRadiusMeters: 50,

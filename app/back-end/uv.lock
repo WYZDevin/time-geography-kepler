@@ -196,6 +196,18 @@ wheels = [
 ]
 
 [[package]]
+name = "gunicorn"
+version = "26.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/b7/a4a3f632f823e432ce6bc65f62961b7980c898c77f075a2f7118cb3846fe/gunicorn-26.0.0.tar.gz", hash = "sha256:ca9346f85e3a4aeeb64d491045c16b9a35647abd37ea15efe53080eb8b090baf", size = 727286 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/40/9c2384fc2be4ad25dd4a49decd5ad9ea5a3639814c11bd40ab77cb9f0a14/gunicorn-26.0.0-py3-none-any.whl", hash = "sha256:40233d26a5f0d1872916188c276e21641155111c2853f0c2cd55260aec0d24fc", size = 212009 },
+]
+
+[[package]]
 name = "h3"
 version = "4.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -901,10 +913,12 @@ dependencies = [
     { name = "flask" },
     { name = "flask-cors" },
     { name = "geopandas" },
+    { name = "gunicorn" },
     { name = "h3" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pyproj" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "shapely" },
 ]
@@ -919,7 +933,6 @@ dev = [
 dev = [
     { name = "pylint" },
     { name = "pytest" },
-    { name = "requests" },
 ]
 
 [package.metadata]
@@ -927,11 +940,13 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-cors", specifier = ">=4.0" },
     { name = "geopandas", specifier = ">=1.0" },
+    { name = "gunicorn", specifier = ">=21.0" },
     { name = "h3", specifier = ">=3.7" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyproj", specifier = ">=3.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "scipy", specifier = ">=1.12" },
     { name = "shapely", specifier = ">=2.0" },
@@ -941,7 +956,6 @@ requires-dist = [
 dev = [
     { name = "pylint", specifier = ">=4.0.5" },
     { name = "pytest", specifier = ">=9.0.2" },
-    { name = "requests", specifier = ">=2.33.1" },
 ]
 
 [[package]]

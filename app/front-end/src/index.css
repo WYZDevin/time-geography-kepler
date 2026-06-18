@@ -174,6 +174,24 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* Indeterminate progress bar — a fill that slides across the track to
+   signal "still working" when there is no real percentage to report
+   (used by BackendProgress for long-running backend tool runs). */
+@keyframes indeterminate-progress {
+  0% { left: -40%; width: 40%; }
+  50% { left: 25%; width: 55%; }
+  100% { left: 100%; width: 40%; }
+}
+
+.animate-indeterminate {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  height: 100%;
+  border-radius: inherit;
+  animation: indeterminate-progress 1.3s ease-in-out infinite;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

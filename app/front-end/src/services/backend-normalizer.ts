@@ -70,9 +70,15 @@ function normalizeFeatureCollection(
 // ---------------------------------------------------------------------------
 
 function normalizeTimeGeography(fc: any, outputIndex: number): FeatureCollection {
-  // outputIndex 0 = trajectory, outputIndex 1 = stay points
-  const isStayPoints = outputIndex > 0 || fc.features.some(
-    (f: any) => f.properties?._dataset_type === 'stay-point'
+  // Output kinds are detected by the backend's _dataset_type tag: the 2D
+  // ground path is optional and shifts the ordering, so index alone is only
+  // a fallback for older backends that don't tag the trajectory output.
+  const dsType = fc.features[0]?.properties?._dataset_type;
+  const is2D = dsType === 'time-geography-trajectory-2d';
+  const isStayPoints = !is2D && (
+    dsType === 'stay-point' ||
+    (dsType == null && outputIndex > 0) ||
+    fc.features.some((f: any) => f.properties?._dataset_type === 'stay-point')
   );
 
   const features: GeoJSONFeature[] = fc.features.map((f: any) => {
@@ -106,6 +112,9 @@ function normalizeTimeGeography(fc: any, outputIndex: number): FeatureCollection
     if (isStayPoints) {
       props._dataset_type = 'stay-points';
       props._layer_config = createStayPointsLayerConfig();
+    } else if (is2D) {
+      props._dataset_type = 'time-geography-trajectory-2d';
+      props._layer_config = create2DTrajectoryLayerConfig();
     } else {
       props._dataset_type = 'time-geography-trajectory';
       props._layer_config = createTrajectoryLayerConfig();
@@ -128,8 +137,26 @@ const STKDE_CONFIDENCE_LEVELS = [
 ];
 
 function normalizeStkde(fc: any, outputIndex: number): FeatureCollection {
-  const level = STKDE_CONFIDENCE_LEVELS[outputIndex] ?? STKDE_CONFIDENCE_LEVELS[0];
-  const dataId = `stkde-density-${outputIndex + 1}`;
+  const first = fc.features[0];
+
+  // Optional 3D trajectory overlay output — same shape as a time-geography run
+  if (first?.properties?._dataset_type === 'time-geography-trajectory') {
+    return normalizeTimeGeography(fc, 0);
+  }
+
+  // Optional flat 2D KDE ground projection — gradient-colored by density
+  if (first?.properties?.ground_projection === true) {
+    return normalizeStkdeGround(fc);
+  }
+
+  // Confidence level comes from the per-class classification value (1..3):
+  // outputIndex is unreliable once ground/trajectory outputs extend the list.
+  const classification = first?.properties?.classification;
+  const levelIndex = typeof classification === 'number'
+    ? Math.min(Math.max(classification - 1, 0), 2)
+    : Math.min(outputIndex, 2);
+  const level = STKDE_CONFIDENCE_LEVELS[levelIndex] ?? STKDE_CONFIDENCE_LEVELS[0];
+  const dataId = `stkde-density-${levelIndex + 1}`;
 
   // Derive max time_slice_index to compute _time_order (0..1)
   let maxSliceIndex = 0;
@@ -177,15 +204,44 @@ function normalizeStkde(fc: any, outputIndex: number): FeatureCollection {
   return { type: 'FeatureCollection', features };
 }
 
+// Flat 2D spatial KDE of all points (time ignored): one collection of cells
+// gradient-colored by their raw density value, ArcGIS-style.
+function normalizeStkdeGround(fc: any): FeatureCollection {
+  const dataId = 'stkde-ground';
+
+  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
+    const props = { ...f.properties };
+
+    if (BACKEND_HEIGHT_FIELD in props) {
+      props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
+      delete props[BACKEND_HEIGHT_FIELD];
+    }
+
+    props._dataset_type = dataId;
+    if (!props._geojson && f.geometry) {
+      props._geojson = JSON.stringify(f.geometry);
+    }
+    props._layer_config = createStkdeGroundLayerConfig(dataId);
+
+    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
 // ---------------------------------------------------------------------------
 // Space-Time Cube
 // ---------------------------------------------------------------------------
 
-function normalizeSpaceTimeCube(fc: any, outputIndex: number): FeatureCollection {
-  // Output 0 = STC cube polygons; Output 1 = trajectory exposure line segments
-  if (outputIndex === 1) return _normalizeStcTrajectory(fc);
+function normalizeSpaceTimeCube(fc: any, _outputIndex: number): FeatureCollection {
+  // Output kinds are detected by content, not index: the ground projection is
+  // optional and shifts the ordering. Trajectory = LineStrings; ground = flat
+  // polygons tagged `ground_projection`; everything else = the cube stack.
+  const first = fc.features?.[0];
+  if (first?.geometry?.type === 'LineString') return _normalizeStcTrajectory(fc);
+  if (first?.properties?.ground_projection) return _normalizeStcGround(fc);
 
-  const dataId = `space-time-cube-${outputIndex}`;
+  const dataId = 'space-time-cube-0';
 
   // Detect whether env data is present so we can choose the right color field
   const hasEnv = fc.features.some(
@@ -243,6 +299,30 @@ function _normalizeStcTrajectory(fc: any): FeatureCollection {
     }
 
     props._layer_config = createStcTrajectoryLayerConfig();
+    return { type: 'Feature' as const, geometry: f.geometry, properties: props };
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
+function _normalizeStcGround(fc: any): FeatureCollection {
+  const dataId = 'stc-ground';
+  const hasEnv = fc.features.some((f: any) => f.properties?.env_value != null);
+
+  const features: GeoJSONFeature[] = fc.features.map((f: any) => {
+    const props = { ...f.properties };
+
+    if (BACKEND_HEIGHT_FIELD in props) {
+      props[PROCESSED_HEIGHT_FIELD] = props[BACKEND_HEIGHT_FIELD];
+      delete props[BACKEND_HEIGHT_FIELD];
+    }
+
+    props._dataset_type = dataId;
+    if (!props._geojson && f.geometry) {
+      props._geojson = JSON.stringify(f.geometry);
+    }
+    props._layer_config = createStcGroundLayerConfig(dataId, hasEnv);
+
     return { type: 'Feature' as const, geometry: f.geometry, properties: props };
   });
 
@@ -545,6 +625,30 @@ function createTrajectoryLayerConfig(): any {
   };
 }
 
+function create2DTrajectoryLayerConfig(): any {
+  return {
+    id: `time-geography-trajectory-2d-layer-${Date.now()}`,
+    type: 'line',
+    config: {
+      dataId: 'time-geography-trajectory-2d',
+      label: '2D Trajectory',
+      columnMode: 'neighbors',
+      color: COLORS.LINE,
+      columns: {
+        lat: 'latitude',
+        lng: 'longitude',
+        neighbors: PROCESSED_NEIGHBORS_FIELD,
+      },
+      isVisible: true,
+      visConfig: {
+        opacity: 0.9,
+        thickness: 2,
+        enable3d: false,
+      },
+    },
+  };
+}
+
 function createStayPointsLayerConfig(): any {
   return {
     id: `stay-points-layer-${Date.now()}`,
@@ -621,6 +725,44 @@ function createStkdeLayerConfig(
   };
 }
 
+function createStkdeGroundLayerConfig(dataId: string): any {
+  return {
+    type: 'geojson',
+    config: {
+      dataId,
+      columnMode: 'geojson',
+      label: 'STKDE 2D Density (Ground)',
+      columns: { geojson: '_geojson' },
+      isVisible: true,
+      color: COLORS.STKDE_95,
+      // Low → high density: pale yellow → dark red, the classic KDE heat ramp
+      colorRange: {
+        name: 'Density',
+        type: 'sequential',
+        category: 'Uber',
+        colors: ['#FFF5EB', '#FDD49E', '#FDBB84', '#FC8D59', '#E34A33', '#B30000'],
+      },
+      visConfig: {
+        opacity: 0.7,
+        strokeOpacity: 0,
+        thickness: 0.5,
+        stroked: false,
+        filled: true,
+        enable3d: false,
+        wireframe: false,
+      },
+      hidden: false,
+    },
+    visualChannels: {
+      colorField: { name: 'density', type: 'real' },
+      colorScale: 'quantize',
+      strokeColorField: null,
+      strokeColorScale: 'quantile',
+      sizeField: null,
+    },
+  };
+}
+
 // Quiet (low) → loud (high): blue → red, matching noise/pollution scales
 const EXPOSURE_COLOR_RANGE = {
   name: 'Exposure',
@@ -665,6 +807,45 @@ function createSpaceTimeCubeLayerConfig(dataId: string, hasEnv: boolean): any {
     },
     visualChannels: {
       heightScale: 'linear',
+      colorField: hasEnv
+        ? { name: 'env_value', type: 'real' }
+        : { name: 'count', type: 'integer' },
+      colorScale: 'quantize',
+      strokeColorField: null,
+      strokeColorScale: 'quantile',
+      sizeField: null,
+    },
+  };
+}
+
+function createStcGroundLayerConfig(dataId: string, hasEnv: boolean): any {
+  return {
+    type: 'geojson',
+    config: {
+      dataId,
+      columnMode: 'geojson',
+      label: 'Space-Time Cube (Ground)',
+      columns: { geojson: '_geojson' },
+      isVisible: true,
+      color: COLORS.AQUARIUM,
+      colorRange: hasEnv ? EXPOSURE_COLOR_RANGE : {
+        name: 'Count',
+        type: 'sequential',
+        category: 'Custom',
+        colors: ['#edf8fb', '#b2e2e2', '#66c2a4', '#2ca25f', '#006d2c'],
+      },
+      visConfig: {
+        opacity: 0.65,
+        strokeOpacity: 0.8,
+        thickness: 0.5,
+        stroked: true,
+        filled: true,
+        enable3d: false,
+        wireframe: false,
+      },
+      hidden: false,
+    },
+    visualChannels: {
       colorField: hasEnv
         ? { name: 'env_value', type: 'real' }
         : { name: 'count', type: 'integer' },

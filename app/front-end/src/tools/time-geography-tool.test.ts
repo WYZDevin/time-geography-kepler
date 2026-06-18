@@ -26,7 +26,7 @@ describe('TimeGeographyTool', () => {
     expect(tool.id).toBe('time-geography');
     expect(tool.category).toBe('visualization');
     expect(tool.version).toBe('2.0.0');
-    expect(tool.capabilities.executionPolicy).toBe('frontend_only');
+    expect(tool.capabilities.executionPolicy).toBe('backend_only'); // TEMPORARY: computation moved to backend
   });
 
   it('declares attributeMapping with time field', () => {

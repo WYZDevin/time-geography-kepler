@@ -3,8 +3,9 @@ import type { MapViewState, MapState, MapDataset, DeckLayerDescriptor, SelectedA
 
 const initialState: MapState = {
   viewState: {
-    longitude: -122.4,
-    latitude: 37.8,
+    // Default view: downtown Toronto
+    longitude: -79.38,
+    latitude: 43.65,
     zoom: 11,
     pitch: 45,
     bearing: 0,

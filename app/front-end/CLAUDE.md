@@ -143,7 +143,7 @@ The backend client already exists in `backend-api-service.ts`. It targets the Fl
 |--------|------|---------|
 | `GET` | `/api/v1/health` | Check if backend is reachable (5s timeout) |
 | `GET` | `/api/v1/tools` | Fetch list of backend-available tools with their `executionPolicy` |
-| `POST` | `/api/v1/tools/{toolId}/execute` | Run a tool. Body: `{ data, options, attributes, sourceDatasetIds }` |
+| `POST` | `/api/v1/tools/{toolId}/execute` | Run a tool. Body: `{ data, options, attributes, sourceDatasetIds, researchArea? }`. `researchArea` is an optional GeoJSON polygon (the global research area, when clipping is enabled); the backend filters output to features intersecting it. |
 
 ### Backend response normalization
 

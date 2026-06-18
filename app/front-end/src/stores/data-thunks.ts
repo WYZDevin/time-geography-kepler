@@ -3,6 +3,7 @@ import { FeatureCollection } from '@/interfaces/data-interfaces';
 import { ToolUtils } from '@/tools/tool-utils';
 import { DataSource, addDataSource, removeDataSource } from './data-slice';
 import { setLargeFile, deleteLargeFile } from '@/services/large-file-cache';
+import { saveLargeFile, deleteLargeFileFromDB } from '@/services/persistence-service';
 
 /**
  * Upload new data source
@@ -134,6 +135,12 @@ export const uploadDataFromFile = createAsyncThunk<
       // lightweight stub so immer never has to walk 1 M+ features.
       const id = ToolUtils.generateId('data');
       setLargeFile(id, data);
+      // Persist the payload so it survives a reload (the Redux stub alone would
+      // leave the dataset selectable but data-less). Fire-and-forget; a failed
+      // write only costs the rehydration-after-reload, not the current session.
+      saveLargeFile(id, data).catch(err =>
+        console.error('[large-file] failed to persist dataset to IndexedDB:', err),
+      );
 
       const stub: FeatureCollection = { type: 'FeatureCollection', features: [] };
       const bounds = undefined; // skip for large env files
@@ -171,6 +178,9 @@ export const removeDataSourceWithCleanup = createAsyncThunk<void, string>(
   'data/removeWithCleanup',
   async (id, { dispatch }) => {
     deleteLargeFile(id);
+    deleteLargeFileFromDB(id).catch(err =>
+      console.error('[large-file] failed to evict dataset from IndexedDB:', err),
+    );
     dispatch(removeDataSource(id));
   }
 );

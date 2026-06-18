@@ -5,6 +5,18 @@ import * as turf from '@turf/turf';
 
 export const STKDE_Z_AXIS_FIELD = 'z_axis';
 
+// Auto-detected grids cap at 50x50 cells; an explicit user cell size is
+// honored up to a larger safety cap. The kernel loop batches points so the
+// broadcasted [batch, rows, cols] tensors never exceed MAX_BROADCAST_ELEMENTS
+// elements, keeping memory bounded for fine grids.
+const MAX_GRID_CELLS = 2500;
+const MAX_USER_GRID_CELLS = 62500; // 250x250
+const MAX_BROADCAST_ELEMENTS = 4_194_304; // ~16 MB float32 per tensor
+
+// Metres per degree of latitude — used to convert the user-facing cell size
+// (metres) to the grid's internal lon/lat degrees and back.
+export const METERS_PER_DEGREE_LAT = 111320;
+
 export interface STKDEResult {
   density: number[][][] | number[][];  // 3D if multiple time slices; 2D if single
   x_centers: number[];
@@ -39,8 +51,6 @@ export async function tf_stkde(
   opts?: { userField?: string; align?: boolean }
 ): Promise<STKDEResult> {
 
-  // Limit grid size to prevent WebGL issues
-  const MAX_GRID_CELLS = 2500; // 50x50 max grid
   // --- Data Extraction ---
   const features = gdf.features;
   const n = features.length;
@@ -138,6 +148,7 @@ export async function tf_stkde(
   let y_min = bbox[1] - spatial_bandwidth;
   let x_max = bbox[2] + spatial_bandwidth;
   let y_max = bbox[3] + spatial_bandwidth;
+  const userCellSize = cell_size !== undefined;
   if (cell_size === undefined) {
     const dx_extent = x_max - x_min;
     const dy_extent = y_max - y_min;
@@ -145,35 +156,51 @@ export async function tf_stkde(
     cell_size = Math.min(dx_extent, dy_extent) / 50;
     if (cell_size <= 0) cell_size = 1.0;
   }
-  let n_cols = Math.ceil((x_max - x_min) / cell_size);
-  let n_rows = Math.ceil((y_max - y_min) / cell_size);
 
-  // Limit grid size to prevent WebGL framebuffer errors
+  // Cells must be square on the ground (equal metres N-S and E-W), not equal
+  // degrees: one degree of longitude is cos(latitude) times shorter than one
+  // degree of latitude, so equal-degree cells render as rectangles away from
+  // the equator. Widen the longitude step by 1/cos(lat) to compensate.
+  const cosLat = Math.max(Math.cos(((y_min + y_max) / 2) * Math.PI / 180), 0.01);
+  let cell_size_y = cell_size;
+  let cell_size_x = cell_size / cosLat;
+
+  let n_cols = Math.ceil((x_max - x_min) / cell_size_x);
+  let n_rows = Math.ceil((y_max - y_min) / cell_size_y);
+
+  // Limit grid size: auto-detected grids stay at the conservative 50x50
+  // default, while an explicit user cell size is honored up to a larger
+  // safety cap (the kernel loop batches points, so memory stays bounded
+  // either way). A uniform downscale preserves n_cols/n_rows, so recomputing
+  // each step from the bounds keeps the square-in-metres aspect ratio.
+  const maxCells = userCellSize ? MAX_USER_GRID_CELLS : MAX_GRID_CELLS;
   const totalCells = n_cols * n_rows;
-  if (totalCells > MAX_GRID_CELLS) {
-    console.warn(`Grid size ${n_cols}x${n_rows} (${totalCells} cells) exceeds limit. Reducing to prevent WebGL errors.`);
-    const scaleFactor = Math.sqrt(MAX_GRID_CELLS / totalCells);
+  if (totalCells > maxCells) {
+    console.warn(`Grid size ${n_cols}x${n_rows} (${totalCells} cells) exceeds the ${maxCells}-cell limit. Coarsening the grid.`);
+    const scaleFactor = Math.sqrt(maxCells / totalCells);
     n_cols = Math.floor(n_cols * scaleFactor);
     n_rows = Math.floor(n_rows * scaleFactor);
-    // Recalculate cell_size based on new grid dimensions
-    cell_size = Math.max((x_max - x_min) / n_cols, (y_max - y_min) / n_rows);
+    cell_size_x = (x_max - x_min) / n_cols;
+    cell_size_y = (y_max - y_min) / n_rows;
   }
 
-  x_max = x_min + n_cols * cell_size;
-  y_max = y_min + n_rows * cell_size;
+  x_max = x_min + n_cols * cell_size_x;
+  y_max = y_min + n_rows * cell_size_y;
+  // Returned/base cell size tracks the latitude (N-S) extent.
+  cell_size = cell_size_y;
 
   // Compute grid cell center coordinates using TensorFlow.js (replace for-loop with tensor operations).
   const colIndices = tf.range(0, n_cols, 1, 'float32');
-  const x_min_scalar = tf.scalar(x_min + 0.5 * cell_size);
-  const x_centers_tensor = tf.add(x_min_scalar, tf.mul(colIndices, cell_size));
+  const x_min_scalar = tf.scalar(x_min + 0.5 * cell_size_x);
+  const x_centers_tensor = tf.add(x_min_scalar, tf.mul(colIndices, cell_size_x));
   const x_centers = x_centers_tensor.arraySync() as number[];
   colIndices.dispose();
   x_min_scalar.dispose();
   x_centers_tensor.dispose();
 
   const rowIndices = tf.range(0, n_rows, 1, 'float32');
-  const y_min_scalar = tf.scalar(y_min + 0.5 * cell_size);
-  const y_centers_tensor = tf.add(y_min_scalar, tf.mul(rowIndices, cell_size));
+  const y_min_scalar = tf.scalar(y_min + 0.5 * cell_size_y);
+  const y_centers_tensor = tf.add(y_min_scalar, tf.mul(rowIndices, cell_size_y));
   const y_centers = y_centers_tensor.arraySync() as number[];
   rowIndices.dispose();
   y_min_scalar.dispose();
@@ -201,6 +228,15 @@ export async function tf_stkde(
   const Xgrid = tf.tile(tfXCenters.reshape([1, n_cols]), [n_rows, 1]);
   const Ygrid = tf.tile(tfYCenters.reshape([n_rows, 1]), [1, n_cols]);
 
+  // Points are processed in fixed-size batches: the broadcasted tensors below
+  // have shape [batch, n_rows, n_cols], so batching keeps peak memory bounded
+  // instead of scaling with n_points * n_cells (which fine user-specified
+  // grids would otherwise blow past).
+  const pointBatch = Math.max(1, Math.floor(MAX_BROADCAST_ELEMENTS / (n_rows * n_cols)));
+  const Xgrid_exp = Xgrid.reshape([1, n_rows, n_cols]); // [1, n_rows, n_cols]
+  const Ygrid_exp = Ygrid.reshape([1, n_rows, n_cols]); // [1, n_rows, n_cols]
+  const one = tf.scalar(1.0);
+
   const densityTimeSlices: number[][][] = [];
   for (let t_idx = 0; t_idx < time_centers.length; t_idx++) {
     const t_center = time_centers[t_idx];
@@ -208,52 +244,61 @@ export async function tf_stkde(
     const dt = tf.abs(tf.sub(tfT, t_center));
     const t_u = tf.div(dt, temporal_bandwidth);
     const mask = tf.lessEqual(dt, temporal_bandwidth);
-    const one = tf.scalar(1.0);
     const t_weight_all = tf.mul(const_time, tf.pow(tf.sub(one, tf.pow(t_u, 2)), 2));
     const t_weight = tf.where(mask, t_weight_all, tf.zerosLike(t_weight_all));
 
-    // Spatial kernel: compute differences between every point and every grid cell.
-    const tfX_exp = tfX.reshape([n, 1, 1]);             // [n, 1, 1]
-    const tfY_exp = tfY.reshape([n, 1, 1]);             // [n, 1, 1]
-    const Xgrid_exp = Xgrid.reshape([1, n_rows, n_cols]); // [1, n_rows, n_cols]
-    const Ygrid_exp = Ygrid.reshape([1, n_rows, n_cols]); // [1, n_rows, n_cols]
-    const diffX = tf.sub(Xgrid_exp, tfX_exp);
-    const diffY = tf.sub(Ygrid_exp, tfY_exp);
-    const dist2 = tf.add(tf.square(diffX), tf.square(diffY));
-    const spatial_mask = tf.lessEqual(dist2, spatial_bandwidth * spatial_bandwidth);
-    const spatial_u = tf.div(dist2, spatial_bandwidth * spatial_bandwidth);
-    const spatial_kernel_all = tf.mul(const_spatial, tf.pow(tf.sub(one, spatial_u), 2));
-    const spatial_kernel = tf.where(spatial_mask, spatial_kernel_all, tf.zerosLike(spatial_kernel_all));
+    let densityAcc = tf.zeros([n_rows, n_cols]);
+    for (let start = 0; start < n; start += pointBatch) {
+      const len = Math.min(pointBatch, n - start);
+      const xBatch = tfX.slice(start, len).reshape([len, 1, 1]);   // [len, 1, 1]
+      const yBatch = tfY.slice(start, len).reshape([len, 1, 1]);   // [len, 1, 1]
+      const wBatch = t_weight.slice(start, len).reshape([len, 1, 1]);
 
-    // Multiply each point's spatial kernel by its temporal weight and sum over points.
-    const t_weight_exp = t_weight.reshape([n, 1, 1]);
-    const contribution = tf.mul(t_weight_exp, spatial_kernel);
-    const density_slice = contribution.sum(0); // [n_rows, n_cols]
-    const density_slice_array = await density_slice.array() as number[][];
+      // Spatial kernel: differences between the batch points and every grid cell.
+      const diffX = tf.sub(Xgrid_exp, xBatch);
+      const diffY = tf.sub(Ygrid_exp, yBatch);
+      const dist2 = tf.add(tf.square(diffX), tf.square(diffY));
+      const spatial_mask = tf.lessEqual(dist2, spatial_bandwidth * spatial_bandwidth);
+      const spatial_u = tf.div(dist2, spatial_bandwidth * spatial_bandwidth);
+      const spatial_kernel_all = tf.mul(const_spatial, tf.pow(tf.sub(one, spatial_u), 2));
+      const spatial_kernel = tf.where(spatial_mask, spatial_kernel_all, tf.zerosLike(spatial_kernel_all));
+
+      // Multiply each point's spatial kernel by its temporal weight and sum over points.
+      const contribution = tf.mul(wBatch, spatial_kernel);
+      const partial = contribution.sum(0); // [n_rows, n_cols]
+      const nextAcc = tf.add(densityAcc, partial);
+
+      // Dispose temporary tensors for this batch.
+      xBatch.dispose();
+      yBatch.dispose();
+      wBatch.dispose();
+      diffX.dispose();
+      diffY.dispose();
+      dist2.dispose();
+      spatial_mask.dispose();
+      spatial_u.dispose();
+      spatial_kernel_all.dispose();
+      spatial_kernel.dispose();
+      contribution.dispose();
+      partial.dispose();
+      densityAcc.dispose();
+      densityAcc = nextAcc;
+    }
+
+    const density_slice_array = await densityAcc.array() as number[][];
     densityTimeSlices.push(density_slice_array);
 
-    // Dispose temporary tensors for this iteration.
+    // Dispose temporary tensors for this time slice.
     dt.dispose();
     t_u.dispose();
     mask.dispose();
     t_weight_all.dispose();
     t_weight.dispose();
-    tfX_exp.dispose();
-    tfY_exp.dispose();
-    Xgrid_exp.dispose();
-    Ygrid_exp.dispose();
-    diffX.dispose();
-    diffY.dispose();
-    dist2.dispose();
-    spatial_mask.dispose();
-    spatial_u.dispose();
-    spatial_kernel_all.dispose();
-    spatial_kernel.dispose();
-    t_weight_exp.dispose();
-    contribution.dispose();
-    density_slice.dispose();
-    one.dispose();
+    densityAcc.dispose();
   }
+  one.dispose();
+  Xgrid_exp.dispose();
+  Ygrid_exp.dispose();
 
   // Dispose remaining tensors.
   tfX.dispose();
@@ -279,6 +324,78 @@ export async function tf_stkde(
     : time_centers.map(tc => new Date(t_min_val + tc * 1000));
 
   return { density, x_centers, y_centers, time_values, cell_size, align };
+}
+
+/**
+ * Estimate the grid cell size (in metres) that tf_stkde's auto-detection would
+ * pick for a dataset, without running the density computation. Mirrors the
+ * bandwidth estimation and grid definition in tf_stkde (bandwidth padding,
+ * min-extent/50 default, square-in-metres widening, MAX_GRID_CELLS clamp) —
+ * keep the two in sync. Returns null when no estimate can be made.
+ */
+export function estimateAutoCellSizeMeters(gdf: GeoJSON.FeatureCollection): number | null {
+  const points = gdf.features.filter(f => f.geometry?.type === 'Point');
+  const n = points.length;
+  if (n === 0) return null;
+
+  const x_vals = points.map(f => (f.geometry as GeoJSON.Point).coordinates[0]);
+  const y_vals = points.map(f => (f.geometry as GeoJSON.Point).coordinates[1]);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let sumX = 0, sumY = 0;
+  for (let i = 0; i < n; i++) {
+    const x = x_vals[i], y = y_vals[i];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    sumX += x;
+    sumY += y;
+  }
+
+  // Robust spatial bandwidth — same estimator as tf_stkde.
+  const meanX = sumX / n, meanY = sumY / n;
+  let sumSq = 0;
+  const distances = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const dx = x_vals[i] - meanX, dy = y_vals[i] - meanY;
+    const d2 = dx * dx + dy * dy;
+    sumSq += d2;
+    distances[i] = Math.sqrt(d2);
+  }
+  const sd = Math.sqrt(sumSq / n);
+  distances.sort((a, b) => a - b);
+  const dm = n % 2 === 0 ? (distances[n / 2 - 1] + distances[n / 2]) / 2 : distances[Math.floor(n / 2)];
+  const robustSigma = dm > 0 ? dm / 0.6745 : sd;
+  let bandwidth = (sd === 0 && dm === 0) ? 0 : 0.9 * Math.min(sd, robustSigma) * Math.pow(n, -1 / 6);
+  if (bandwidth <= 0) bandwidth = 1e-9;
+
+  // Grid definition — bbox padded by the bandwidth, default cell = min extent / 50.
+  const x_min = minX - bandwidth;
+  const y_min = minY - bandwidth;
+  const x_max = maxX + bandwidth;
+  const y_max = maxY + bandwidth;
+  let cell_size = Math.min(x_max - x_min, y_max - y_min) / 50;
+  if (cell_size <= 0) cell_size = 1.0;
+
+  const cosLat = Math.max(Math.cos(((y_min + y_max) / 2) * Math.PI / 180), 0.01);
+  let cell_size_y = cell_size;
+  const cell_size_x = cell_size / cosLat;
+
+  let n_cols = Math.ceil((x_max - x_min) / cell_size_x);
+  let n_rows = Math.ceil((y_max - y_min) / cell_size_y);
+  const totalCells = n_cols * n_rows;
+  if (totalCells > MAX_GRID_CELLS) {
+    const scaleFactor = Math.sqrt(MAX_GRID_CELLS / totalCells);
+    n_cols = Math.floor(n_cols * scaleFactor);
+    n_rows = Math.floor(n_rows * scaleFactor);
+    if (n_cols < 1 || n_rows < 1) return null;
+    cell_size_y = (y_max - y_min) / n_rows;
+  }
+
+  const meters = cell_size_y * METERS_PER_DEGREE_LAT;
+  return Number.isFinite(meters) && meters > 0 ? meters : null;
 }
 
 /* --- TensorFlow.js Helper Functions --- */
@@ -553,6 +670,12 @@ export function createClassificationGeoJSON(
   const rowCount = X.length;
   const columnCount = rowCount > 0 ? X[0].length : 0;
 
+  // Per-axis half-extent from the actual grid spacing. The grid is square in
+  // metres (longitude step wider than latitude), so deriving the extents from
+  // the meshgrid keeps cells tiling correctly instead of forcing equal degrees.
+  const halfX = columnCount > 1 ? Math.abs(X[0][1] - X[0][0]) / 2 : cellSize / 2;
+  const halfY = rowCount > 1 ? Math.abs(Y[1][0] - Y[0][0]) / 2 : cellSize / 2;
+
   const featuresByClassification: Feature<Polygon>[][] = [[], [], [], []];
 
   for (let t = 0; t < timeSliceCount; t++) {
@@ -571,11 +694,11 @@ export function createClassificationGeoJSON(
         const y = Y[row][col];
 
         const squareCoords = [
-          [x - cellSize / 2, y - cellSize / 2, zBase],
-          [x + cellSize / 2, y - cellSize / 2, zBase],
-          [x + cellSize / 2, y + cellSize / 2, zBase],
-          [x - cellSize / 2, y + cellSize / 2, zBase],
-          [x - cellSize / 2, y - cellSize / 2, zBase]
+          [x - halfX, y - halfY, zBase],
+          [x + halfX, y - halfY, zBase],
+          [x + halfX, y + halfY, zBase],
+          [x - halfX, y + halfY, zBase],
+          [x - halfX, y - halfY, zBase]
         ];
 
         const feature: Feature<Polygon> = {

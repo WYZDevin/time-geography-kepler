@@ -45,6 +45,7 @@ Requires Python ≥ 3.12. Uses **uv** as the package manager (`uv.lock`).
 - The **API contract** is the boundary. Both CLAUDE.md files define the same endpoint shapes — keep them in sync when changing the API.
 - Frontend and backend share no code. Do not import from one into the other.
 - The frontend works fully offline (all tools have a browser implementation or are disabled). The backend is optional and additive.
+  - **Temporarily overridden (2026-06):** all analysis tools are currently `backend_only` — computation runs on the Flask backend, which must be online. The browser implementations remain in place; revert by restoring `executionPolicy: 'frontend_only'` in `stkde-tool.ts` and `time-geography-tool.ts`.
 - When adding a new tool, implement it in **both** codebases if the execution policy is `hybrid`. Update both CLAUDE.md files if the contract changes.
 
 ## Coding Guidelines

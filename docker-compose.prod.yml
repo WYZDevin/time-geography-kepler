@@ -1,6 +1,6 @@
 services:
   backend:
-    image: yongzwu/time-geography-backend:latest
+    image: ${IMAGE_NAMESPACE:-yongzwu}/time-geography-backend:${IMAGE_TAG:-latest}
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -12,7 +12,7 @@ services:
       start_period: 15s
 
   frontend:
-    image: yongzwu/time-geography-frontend:latest
+    image: ${IMAGE_NAMESPACE:-yongzwu}/time-geography-frontend:${IMAGE_TAG:-latest}
     ports:
       - "5173:80"
     restart: unless-stopped

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from .models import ErrorResponse, ExecuteRequest, ExecutionMetadata, HealthResponse, ListToolsResponse
 from .tool_registry import registry
-from .utils import build_response, gdf_to_geojson, geojson_to_gdf
+from .utils import build_response, filter_to_research_area, gdf_to_geojson, geojson_to_gdf
 
 api = Blueprint("api", __name__, url_prefix="/api/v1")
 
@@ -36,7 +36,15 @@ def execute_tool(tool_id: str) -> Response | tuple[Response, int]:
     start = time.time()
     try:
         gdf = geojson_to_gdf(req.data)
-        result_gdfs = tool.execute(gdf, req.options, req.attributes)
+        exec_options = req.options
+        if req.researchArea:
+            # Hand the area to tools that can pre-clip heavy work (e.g. the road
+            # network prism clips its OSM download extent to it). Kept under a
+            # private key out of req.options so it isn't echoed in runMeta.params.
+            exec_options = {**req.options, "_researchArea": req.researchArea}
+        result_gdfs = tool.execute(gdf, exec_options, req.attributes)
+        if req.researchArea:
+            result_gdfs = [filter_to_research_area(r, req.researchArea) for r in result_gdfs]
         outputs = [gdf_to_geojson(r) for r in result_gdfs]
         warnings = [w for r in result_gdfs for w in r.attrs.get("warnings", [])]
     except Exception as exc:

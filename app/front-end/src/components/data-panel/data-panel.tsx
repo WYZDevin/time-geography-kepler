@@ -21,6 +21,7 @@ import {
   type StorageInfo
 } from '../../services/persistence-service';
 import { CSVUploadDialog } from '../csv-upload/csv-upload-dialog';
+import { ResearchAreaControl } from '../research-area/research-area-control';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
@@ -35,7 +36,6 @@ import {
   Database,
   Upload,
   Trash2,
-  Eye,
   MoreVertical,
   Calendar,
   MapPin,
@@ -115,12 +115,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
           return 0;
       }
     });
-
-  const handleRemove = (dataSourceId: string) => {
-    if (confirm('Are you sure you want to remove this data source?')) {
-      dispatch(removeDataSourceWithCleanup(dataSourceId) as any);
-    }
-  };
 
   const handleToggleSelection = (dataSourceId: string) => {
     if (selectedIds.includes(dataSourceId)) {
@@ -462,7 +456,8 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
       {!isCollapsed && (
         <>
       {/* Data Sources List */}
-      <div className="flex-1 overflow-auto p-4 space-y-3">
+      <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
+        <ResearchAreaControl />
         {dataSources.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
@@ -477,8 +472,9 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
           </div>
         ) : (
           filteredAndSortedDataSources.map((dataSource) => (
-            <Card 
+            <Card
               key={dataSource.id}
+              onClick={() => toggleExpanded(dataSource.id)}
               className={`cursor-pointer transition-all hover:shadow-md ${
                 selectedIds.includes(dataSource.id) ? 'ring-2 ring-blue-500' : ''
               }`}
@@ -493,6 +489,7 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
                         e.stopPropagation();
                         handleToggleSelection(dataSource.id);
                       }}
+                      onClick={(e) => e.stopPropagation()}
                       className="rounded"
                     />
                     <Database className="w-4 h-4" />
@@ -512,40 +509,6 @@ const DataPanel: React.FC<DataPanelProps> = ({ className = '', isCollapsed = fal
                       </div>
                     </div>
                   </div>
-                  
-                  <DropdownMenu modal={false}>
-                    <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm">
-                        <MoreVertical className="w-4 h-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent className="z-[9999]">
-                      <DropdownMenuItem onClick={() => toggleExpanded(dataSource.id)}>
-                        <Eye className="w-4 h-4 mr-2" />
-                        {expandedSources.has(dataSource.id) ? 'Collapse' : 'Expand'}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => {
-                        const json = JSON.stringify(dataSource.data, null, 2);
-                        const blob = new Blob([json], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `${dataSource.name.replace(/\s+/g, '-')}.geojson`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                      }}>
-                        <Download className="w-4 h-4 mr-2" />
-                        Export as GeoJSON
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => handleRemove(dataSource.id)}
-                        className="text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" />
-                        Remove
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </div>
               </CardHeader>
 

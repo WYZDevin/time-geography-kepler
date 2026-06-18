@@ -35,8 +35,11 @@ def _parse_timestamps(gdf: gpd.GeoDataFrame, time_field: str) -> np.ndarray:
             # Looks like Unix milliseconds
             series = pd.to_datetime(col, unit="ms")
     else:
-        # String / datetime column — let pandas infer
-        series = pd.to_datetime(col)
+        # String / datetime column — infer per element: real-world exports mix
+        # formats within one file (e.g. "11/4/2022 0:07" alongside
+        # "2022-09-15 00:02:35"), and bare pd.to_datetime infers the format
+        # from the first row only, then raises on the rest.
+        series = pd.to_datetime(col, format="mixed")
 
     # Ensure timezone-naive (datetime64[ns]) so .astype(int64) gives nanoseconds
     if hasattr(series.dt, "tz") and series.dt.tz is not None:
@@ -59,6 +62,36 @@ def _optimal_z_height(min_lng: float, max_lng: float, min_lat: float, max_lat: f
     """Match frontend ToolUtils.calculateOptimalZAxisHeight: 50% of max horizontal spread in meters."""
     spatial_extent = max(max_lng - min_lng, max_lat - min_lat, 1e-9)
     return max(spatial_extent * 111_000 * 0.5, 1000.0)
+
+
+DAY_MS = 86_400_000
+
+
+def _hsl_to_rgb(h: float, s: float, lightness: float) -> tuple[int, int, int]:
+    c = (1 - abs(2 * lightness - 1)) * s
+    x = c * (1 - abs((h / 60.0) % 2 - 1))
+    m = lightness - c / 2
+    if h < 60:
+        r, g, b = c, x, 0.0
+    elif h < 120:
+        r, g, b = x, c, 0.0
+    elif h < 180:
+        r, g, b = 0.0, c, x
+    elif h < 240:
+        r, g, b = 0.0, x, c
+    elif h < 300:
+        r, g, b = x, 0.0, c
+    else:
+        r, g, b = c, 0.0, x
+    return round((r + m) * 255), round((g + m) * 255), round((b + m) * 255)
+
+
+def _color_for_user_index(index: int) -> list[int]:
+    """Distinct per-user RGBA via the golden-angle hue sequence (matches the
+    frontend time-geography-tool colorForUserIndex)."""
+    hue = (index * 137.508) % 360.0
+    r, g, b = _hsl_to_rgb(hue, 0.65, 0.5)
+    return [r, g, b, 220]
 
 
 class TimeGeographyTool(BaseTool):
@@ -98,29 +131,75 @@ class TimeGeographyTool(BaseTool):
 
         timestamps = _parse_timestamps(gdf, time_field)
 
-        # Sort by time
-        order = np.argsort(timestamps)
+        # Optional per-user split: sort so each user's points are contiguous
+        # and time-ordered. Without a user column this is a plain
+        # chronological sort (single trajectory). Mirrors the frontend
+        # time-geography-tool _preprocessData.
+        user_field = opts.userIdField.strip()
+        if user_field and user_field in gdf.columns:
+            user_ids = gdf[user_field].fillna("unknown").astype(str).values
+            order = np.lexsort((timestamps, user_ids))
+        else:
+            user_field = ""
+            user_ids = None
+            order = np.argsort(timestamps)
         gdf = gdf.iloc[order].reset_index(drop=True)
         timestamps = timestamps[order]
+        if user_ids is not None:
+            user_ids = user_ids[order]
 
-        # Normalize time 0-1
         t_min, t_max = timestamps.min(), timestamps.max()
-        t_range = t_max - t_min if t_max != t_min else 1
-        time_progress = (timestamps - t_min) / t_range
+
+        # Stable per-user index in order of first appearance (drives colors)
+        user_index: dict[str, int] = {}
+        if user_ids is not None:
+            for uid in user_ids:
+                if uid not in user_index:
+                    user_index[uid] = len(user_index)
+
+        # Per-user time alignment: shift each trajectory by a whole number of
+        # days so every user starts on the same date while preserving each
+        # observation's time of day. The displayed timeline is re-anchored to
+        # the midnight of the earliest day.
+        align = bool(user_field) and opts.alignUserTime and len(user_index) > 1
+        elapsed = None
+        if align:
+            days = (timestamps // DAY_MS) * DAY_MS
+            user_start_day: dict[str, int] = {}
+            for uid, day in zip(user_ids, days):
+                cur = user_start_day.get(uid)
+                if cur is None or day < cur:
+                    user_start_day[uid] = int(day)
+            elapsed = np.array(
+                [t - user_start_day[u] for t, u in zip(timestamps, user_ids)],
+                dtype=np.int64,
+            )
+            max_elapsed = int(elapsed.max())
+            time_progress = (
+                elapsed / max_elapsed if max_elapsed > 0 else np.zeros(len(elapsed))
+            )
+            align_anchor = int((t_min // DAY_MS) * DAY_MS)
+            display_timestamps = align_anchor + elapsed
+        else:
+            # Normalize time 0-1
+            t_range = t_max - t_min if t_max != t_min else 1
+            time_progress = (timestamps - t_min) / t_range
+            display_timestamps = timestamps
 
         # Compute optimal height in meters (matching frontend formula)
         bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
         total_height = _optimal_z_height(bounds[0], bounds[2], bounds[1], bounds[3])
         scaled_heights = time_progress * total_height
 
-        # Neighbor indices
+        # Neighbor indices — connect only points belonging to the same user,
+        # so distinct users never get linked into one path.
         n = len(gdf)
         neighbors = []
         for i in range(n):
             nb = []
-            if i > 0:
+            if i > 0 and (user_ids is None or user_ids[i - 1] == user_ids[i]):
                 nb.append(i - 1)
-            if i < n - 1:
+            if i < n - 1 and (user_ids is None or user_ids[i + 1] == user_ids[i]):
                 nb.append(i + 1)
             neighbors.append(nb)
 
@@ -135,14 +214,32 @@ class TimeGeographyTool(BaseTool):
         result[PROCESSED_HEIGHT_FIELD] = scaled_heights.tolist()
         result[PROCESSED_NEIGHBORS_FIELD] = neighbors
         result["_time_progress"] = time_progress.tolist()
-        result["_timestamp"] = timestamps.tolist()
+        result["_timestamp"] = display_timestamps.tolist()
         result["_sequence"] = list(range(n))
         result["latitude"] = coords_y.tolist()
         result["longitude"] = coords_x.tolist()
         result["_dataset_type"] = "time-geography-trajectory"
         result["_layer_config"] = "trajectory-3d"
+        if user_ids is not None:
+            result["_user_id"] = user_ids.tolist()
+            result["color_rgba"] = [
+                _color_for_user_index(user_index[u]) for u in user_ids
+            ]
+        if elapsed is not None:
+            result["_elapsed_ms"] = elapsed.tolist()
 
         outputs = [result]
+
+        # Optional flat 2D ground path — the same trajectory projected onto
+        # the map plane (Z=0), reusing the per-user colors and ordering.
+        if opts.show2D:
+            ground = result.copy()
+            ground = ground.set_geometry(
+                [Point(x, y, 0.0) for x, y in zip(coords_x, coords_y)]
+            )
+            ground[PROCESSED_HEIGHT_FIELD] = 0.0
+            ground["_dataset_type"] = "time-geography-trajectory-2d"
+            outputs.append(ground)
 
         # Stay point detection
         if opts.visualizeStay:
@@ -161,7 +258,7 @@ class TimeGeographyTool(BaseTool):
                         grp_y = coords_y[group_start:i]
                         grp_h = scaled_heights[group_start:i]
                         grp_tp = time_progress[group_start:i]
-                        grp_ts = timestamps[group_start:i]
+                        grp_ts = display_timestamps[group_start:i]
 
                         cx, cy = float(grp_x.mean()), float(grp_y.mean())
                         ch = float(grp_h.mean())
@@ -198,14 +295,14 @@ class TimeGeographyTool(BaseTool):
                     neighbor_count = 0
                     # Scan backward
                     for j in range(i - 1, -1, -1):
-                        if timestamps[i] - timestamps[j] > time_window:
+                        if display_timestamps[i] - display_timestamps[j] > time_window:
                             break
                         dist = _haversine(coords_x[i], coords_y[i], coords_x[j], coords_y[j])
                         if dist < stay_threshold:
                             neighbor_count += 1
                     # Scan forward
                     for j in range(i + 1, n):
-                        if timestamps[j] - timestamps[i] > time_window:
+                        if display_timestamps[j] - display_timestamps[i] > time_window:
                             break
                         dist = _haversine(coords_x[i], coords_y[i], coords_x[j], coords_y[j])
                         if dist < stay_threshold:
@@ -219,7 +316,7 @@ class TimeGeographyTool(BaseTool):
                     stay_gdf["_dataset_type"] = "stay-point"
                     stay_gdf[PROCESSED_TIME_FIELD] = [time_progress[i] for i in stay_indices]
                     stay_gdf[PROCESSED_HEIGHT_FIELD] = [scaled_heights[i] for i in stay_indices]
-                    stay_gdf["_timestamp"] = [timestamps[i] for i in stay_indices]
+                    stay_gdf["_timestamp"] = [display_timestamps[i] for i in stay_indices]
                     stay_gdf["latitude"] = [coords_y[i] for i in stay_indices]
                     stay_gdf["longitude"] = [coords_x[i] for i in stay_indices]
                     outputs.append(stay_gdf)

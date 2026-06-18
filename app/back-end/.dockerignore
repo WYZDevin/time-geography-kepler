@@ -1,6 +1,12 @@
 __pycache__
 *.pyc
+*.pyo
 .venv
 *.egg-info
 .pytest_cache
+.ruff_cache
 tests
+test_stkde_output.py
+examples
+.claude
+*.md

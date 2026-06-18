@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
+from time import perf_counter
 from typing import Any
 
 import geopandas as gpd
@@ -37,6 +38,7 @@ from .pasta import (
     _build_activity_episodes,
     _build_anchor_windows,
 )
+from .timing import log_phase
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +81,10 @@ def execute_h3_pasta(
     logger.info("  speed=%.2f m/s (%.1f km/h), h3_res=%d, min_dwell=%ds",
                 speed_ms, speed_ms * 3.6, resolution, int(min_dwell_s))
 
+    _t = perf_counter()
     traj_gdf, time_field = get_pasta_trajectory(gdf, attributes, anchor_a, anchor_b, duration_minutes)
     logger.info("  trajectory: %d points, time_field=%s", len(traj_gdf), time_field)
+    _t = log_phase(f"h3-pasta: get/interpolate trajectory ({len(traj_gdf)} points)", _t)
 
     timestamps = _parse_timestamps(traj_gdf, time_field)
     order = np.argsort(timestamps)
@@ -178,6 +182,9 @@ def execute_h3_pasta(
 
     logger.info("  %d points processed, %d skipped, %d cells with dwell>0",
                 n - n_skipped, n_skipped, len(dwell_accumulator))
+    _t = log_phase(
+        f"h3-pasta: per-point H3 loop ({n - n_skipped}/{n} points, {len(dwell_accumulator)} cells)", _t,
+    )
 
     if not dwell_accumulator:
         raise ValueError(
@@ -218,6 +225,7 @@ def execute_h3_pasta(
             f.pop("_center_lat", None)
         outputs.append(gpd.GeoDataFrame(merged, crs="EPSG:4326"))
 
+    log_phase(f"h3-pasta: build {len(h3_features)} cell + circle outputs", _t)
     return outputs
 
 
@@ -324,6 +332,7 @@ def execute_pasta(
     if speed_kmh <= 0:
         raise ValueError("Travel speed must be greater than zero")
 
+    _t = perf_counter()
     episodes = _build_activity_episodes(
         gdf,
         time_field=time_field,
@@ -344,6 +353,9 @@ def execute_pasta(
         raise ValueError(
             "No valid fixed-anchor windows found. PASTA needs flexible activities bracketed by fixed activities."
         )
+    _t = log_phase(
+        f"activity-pasta: parse episodes + windows ({len(episodes)} episodes, {len(windows)} windows)", _t,
+    )
 
     bounds = gdf.total_bounds
     max_budget_s = max((w.end.start_ms - w.start.end_ms) / 1000 for w in windows)
@@ -380,6 +392,7 @@ def execute_pasta(
     total_height = max((global_end - global_start) / (60_000 * temporal_resolution_min) * 20, 1000)
     z_per_ms = total_height / time_range_ms
     bin_ms = int(temporal_resolution_min * 60_000)
+    _t = log_phase(f"activity-pasta: setup grid ({rows}×{cols} cells)", _t)
 
     for window in windows:
         budget_s = (window.end.start_ms - window.start.end_ms) / 1000
@@ -451,6 +464,10 @@ def execute_pasta(
 
     if not aggregate:
         raise ValueError("No feasible PASTA cells were found with the current schedule and speed assumptions")
+    _t = log_phase(
+        f"activity-pasta: dwell loop ({feasible_windows} feasible windows, "
+        f"{len(aggregate)} cells, {len(voxel_rows)} voxels)", _t,
+    )
 
     max_weighted = max(v["weighted_dwell_minutes"] for v in aggregate.values())
     surface_rows = []
@@ -507,4 +524,5 @@ def execute_pasta(
         if road_gdf is not None:
             outputs.append(road_gdf)
 
+    log_phase(f"activity-pasta: build {len(surface_rows)} surface + PPA outputs", _t)
     return outputs

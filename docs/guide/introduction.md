@@ -3,7 +3,7 @@
 **Time Geography Kepler** is a geospatial analysis platform for exploring
 movement data through the lens of [time geography](https://en.wikipedia.org/wiki/Time_geography).
 It is built with [React](https://react.dev/), [deck.gl](https://deck.gl/), and
-[MapLibre](https://maplibre.org/) on the front end, with an optional
+[MapLibre](https://maplibre.org/) on the front end, with 
 [Flask](https://flask.palletsprojects.com/) + [GeoPandas](https://geopandas.org/)
 backend for heavier server-side computation.
 
@@ -15,19 +15,17 @@ backend for heavier server-side computation.
 
 ## What makes it different
 
-- **Browser-first.** Every tool has a browser implementation, so the app works
-  fully offline. The backend is *additive* — it unlocks heavier analyses but is
-  never required to get started.
+- **Local only.** Every tool runs in your local computer. No data will leave your device.
 - **3D space-time.** Results are rendered as true 3D space-time visualizations
-  (X = longitude, Y = latitude, Z = time), not flat maps.
-- **Interactive.** Rotate, animate through time, drop pins, hover for values,
-  and click to set prism anchors directly on the map.
+  (X = longitude, Y = latitude, Z = time), not just flat maps.
+- **Interactive.** Rotate, animate through time, drop pins, check value at specific location and time,
+  and click to set prism anchors directly on the map to build space time prism.
 
 ## The toolset at a glance
 
 | Tool | What it answers |
 |------|-----------------|
-| [3D Trajectory](/tools/trajectory-3d) | *Where and when did the subject move?* |
+| [3D Trajectory](/tools/trajectory-3d) | *3D visualization of the trajectory* |
 | [Space-Time Kernel Density](/tools/stkde) | *Where/when does activity concentrate?* |
 | [Space-Time Cube](/tools/space-time-cube) | *What was the environmental exposure along the path?* |
 | [Space-Time Prism](/tools/space-time-prism) | *Where could the subject have been between two points?* |

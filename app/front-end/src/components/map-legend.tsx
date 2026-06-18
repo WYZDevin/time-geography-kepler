@@ -1,8 +1,13 @@
 import { useAppDispatch, useAppSelector } from '@/stores/store';
 import { updateLayer } from '@/stores/map-slice';
 import { startExplorer } from '@/stores/prism-explorer-slice';
+import {
+  selectResearchAreaSources,
+  selectResearchAreaVisible,
+  setResearchAreaVisible,
+} from '@/stores/research-area-slice';
 import { ColorPicker } from './ui/color-picker';
-import { exportViewAsGeoJSON } from '@/services/export-service';
+import { exportAnalysisGeoJSON } from '@/services/export-service';
 import { Eye, EyeOff, ChevronDown, ChevronRight, Diamond, Download } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { DeckLayerDescriptor, MapDataset } from '@/interfaces/map-types';
@@ -19,6 +24,94 @@ const MAX_RENDERED_USERS = 200;
 
 const rgbaToCss = (rgba: number[] | undefined, fallback: string): string =>
   Array.isArray(rgba) ? `rgb(${rgba[0]}, ${rgba[1]}, ${rgba[2]})` : fallback;
+
+// Preset sequential ramps for gradient-colored layers (low → high).
+const COLOR_RAMPS: { name: string; colors: string[] }[] = [
+  { name: 'Heat', colors: ['#FFF5EB', '#FDD49E', '#FDBB84', '#FC8D59', '#E34A33', '#B30000'] },
+  { name: 'Viridis', colors: ['#440154', '#414487', '#2A788E', '#22A884', '#7AD151', '#FDE725'] },
+  { name: 'Blue–Red', colors: ['#2166AC', '#4393C3', '#92C5DE', '#FDDBC7', '#F4A582', '#D6604D', '#B2182B'] },
+  { name: 'Greens', colors: ['#EDF8FB', '#B2E2E2', '#66C2A4', '#2CA25F', '#006D2C'] },
+  { name: 'Blues', colors: ['#F7FBFF', '#DEEBF7', '#C6DBEF', '#9ECAE1', '#6BAED6', '#3182BD', '#08519C'] },
+  { name: 'Purple–Orange', colors: ['#542788', '#998EC3', '#D8DAEB', '#FEE0B6', '#F1A340', '#B35806'] },
+];
+
+const gradientCss = (colors: string[]): string =>
+  `linear-gradient(90deg, ${colors.join(', ')})`;
+
+const isColorRange = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(c => typeof c === 'string');
+
+const sameRamp = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((c, i) => c.toLowerCase() === b[i].toLowerCase());
+
+/**
+ * Gradient editor for layers colored by a data field through a color ramp
+ * (STKDE 2D density, space-time cube, PASTA surfaces, …). Shows the active
+ * low→high gradient and lets the user pick a preset ramp or reverse it.
+ */
+const GradientRampPicker: React.FC<{
+  current: string[];
+  onChange: (colors: string[]) => void;
+}> = ({ current, onChange }) => {
+  const setStop = (index: number, color: string) => {
+    const next = [...current];
+    next[index] = color;
+    onChange(next);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-[10px] text-gray-500">Color gradient</label>
+        <button
+          onClick={() => onChange([...current].reverse())}
+          className="text-[10px] text-blue-600 hover:text-blue-800 bg-transparent border-none cursor-pointer p-0"
+          title="Flip the gradient direction"
+        >
+          Reverse
+        </button>
+      </div>
+      <div
+        className="h-3 rounded border border-gray-200 dark:border-gray-700"
+        style={{ backgroundImage: gradientCss(current) }}
+      />
+      <div className="flex justify-between text-[9px] text-gray-400 mb-1">
+        <span>Low</span>
+        <span>High</span>
+      </div>
+      <div className="grid gap-1 mb-2" style={{ gridTemplateColumns: `repeat(${current.length}, minmax(0, 1fr))` }}>
+        {current.map((color, index) => (
+          <input
+            key={`${index}-${color}`}
+            type="color"
+            value={color}
+            onChange={e => setStop(index, e.target.value)}
+            className="h-5 w-full min-w-0 cursor-pointer rounded border border-gray-200 bg-transparent p-0"
+            title={index === 0 ? 'Low color' : index === current.length - 1 ? 'High color' : `Color stop ${index + 1}`}
+          />
+        ))}
+      </div>
+      <div className="space-y-1">
+        {COLOR_RAMPS.map(ramp => {
+          const selected = sameRamp(current, ramp.colors);
+          return (
+            <button
+              key={ramp.name}
+              onClick={() => onChange(ramp.colors)}
+              className={`w-full h-3.5 rounded cursor-pointer border ${
+                selected
+                  ? 'border-blue-500 ring-1 ring-blue-400'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-gray-400'
+              }`}
+              style={{ backgroundImage: gradientCss(ramp.colors) }}
+              title={ramp.name}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 // Pick up to n evenly-spaced colors from the list, for the summary swatch.
 function sampleColors(colors: string[], n: number): string[] {
@@ -161,7 +254,11 @@ export const MapLegend: React.FC = () => {
   // The space-time prism is disabled while pin-point mode is active.
   const showPrismButton = prismMode === 'idle' && !pinMode;
 
-  if (layers.length === 0) {
+  const researchSources = useAppSelector(selectResearchAreaSources);
+  const researchVisible = useAppSelector(selectResearchAreaVisible);
+  const hasResearchArea = researchSources.length > 0;
+
+  if (layers.length === 0 && !hasResearchArea) {
     return showPrismButton ? (
       <div className="absolute bottom-4 left-4 z-10 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-3">
         <button
@@ -195,7 +292,44 @@ export const MapLegend: React.FC = () => {
       </div>
 
       <div className="p-1">
+        {/* Research area — a global overlay, not a layer descriptor, so it gets
+            its own row wired to the research-area visibility flag. */}
+        {hasResearchArea && (
+          <div className="rounded hover:bg-gray-50 dark:hover:bg-gray-800">
+            <div className="flex items-center gap-2 px-2 py-1.5">
+              <div
+                className="w-3 h-3 rounded-sm flex-shrink-0"
+                style={{
+                  backgroundColor: researchVisible ? 'rgba(16, 185, 129, 0.25)' : 'transparent',
+                  border: `1.5px solid ${researchVisible ? 'rgb(16, 185, 129)' : 'rgb(150, 150, 150)'}`,
+                  opacity: researchVisible ? 1 : 0.5,
+                }}
+              />
+              {/* spacer to align label with the chevron-bearing layer rows */}
+              <span className="w-3 flex-shrink-0" />
+              <span
+                className="text-xs text-gray-700 dark:text-gray-300 flex-1 truncate"
+                style={{ opacity: researchVisible ? 1 : 0.5 }}
+              >
+                Research Area
+              </span>
+              <button
+                className="p-0.5 bg-transparent border-none cursor-pointer text-gray-400 hover:text-gray-600 flex-shrink-0"
+                onClick={() => dispatch(setResearchAreaVisible(!researchVisible))}
+                title={researchVisible ? 'Hide research area' : 'Show research area'}
+              >
+                {researchVisible
+                  ? <Eye className="w-3.5 h-3.5" />
+                  : <EyeOff className="w-3.5 h-3.5 text-gray-300" />}
+              </button>
+            </div>
+          </div>
+        )}
+
         {layers.map(layer => {
+          const colorRange = isColorRange(layer.config.colorRange)
+            ? layer.config.colorRange
+            : null;
           // 3D Trajectory split by user: render a collapsible, searchable
           // per-user legend. Single-trajectory runs (no _user_id) fall through
           // to the normal layer row below.
@@ -223,7 +357,8 @@ export const MapLegend: React.FC = () => {
                 <div
                   className="w-3 h-3 rounded-sm border border-gray-300 flex-shrink-0"
                   style={{
-                    backgroundColor: `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})`,
+                    backgroundColor: colorRange ? undefined : `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})`,
+                    backgroundImage: colorRange ? gradientCss(colorRange) : undefined,
                     opacity: layer.isVisible ? 1 : 0.3,
                   }}
                 />
@@ -326,18 +461,31 @@ export const MapLegend: React.FC = () => {
                     );
                   })()}
 
-                  {/* Color picker */}
-                  <div className="flex items-center gap-2">
-                    <label className="text-[10px] text-gray-500">Color</label>
-                    <ColorPicker
-                      color={layer.color}
-                      onChange={color =>
-                        dispatch(updateLayer({ id: layer.id, changes: { color } }))
+                  {/* Color controls */}
+                  {colorRange ? (
+                    <GradientRampPicker
+                      current={colorRange}
+                      onChange={colors =>
+                        dispatch(updateLayer({
+                          id: layer.id,
+                          changes: { config: { ...layer.config, colorRange: colors } },
+                        }))
                       }
                     />
-                  </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-gray-500">Color</label>
+                      <ColorPicker
+                        color={layer.color}
+                        onChange={color =>
+                          dispatch(updateLayer({ id: layer.id, changes: { color } }))
+                        }
+                      />
+                    </div>
+                  )}
 
-                  {/* Export — plain GeoJSON for use in other software */}
+                  {/* Export — analysis-grade GeoJSON (2D, attribute table only)
+                      for use in ArcGIS / Python / QGIS */}
                   {(() => {
                     const dataset = datasets[layer.datasetId];
                     const featureCount = dataset?.data.features.length ?? 0;
@@ -348,7 +496,10 @@ export const MapLegend: React.FC = () => {
                           if (!dataset) return;
                           const safeName = layer.label.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'layer';
                           const date = new Date().toISOString().slice(0, 10);
-                          exportViewAsGeoJSON(dataset.data, `${safeName}-${date}.geojson`);
+                          exportAnalysisGeoJSON(dataset.data, `${safeName}-${date}.geojson`, {
+                            label: layer.label,
+                            datasetType: dataset.id,
+                          });
                         }}
                         className="flex items-center gap-1 w-full text-[10px] font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed border-none rounded px-2 py-1 cursor-pointer transition-colors"
                         title="Download this layer as a GeoJSON file"

@@ -24,6 +24,7 @@
     "@radix-ui/react-progress": "^1.1.3",
     "@radix-ui/react-select": "^2.1.6",
     "@radix-ui/react-slot": "^1.1.2",
+    "@radix-ui/react-tooltip": "^1.2.9",
     "@reduxjs/toolkit": "^2.11.2",
     "@tailwindcss/vite": "^4.0.9",
     "@tensorflow/tfjs-node": "^4.22.0",
@@ -77,5 +78,14 @@
   },
   "volta": {
     "node": "24.5.0"
+  },
+  "comment:overrides": "Radix pins these internal packages to exact versions, so Dialog (older) and DropdownMenu/Popover/Select/Tooltip (newer) end up with separate copies of DismissableLayer/FocusScope. Those coordinate nested layers via module-level singletons, so duplicate copies make a Dialog dismiss a just-opened dropdown/select (opens then closes in ~10ms). Force a single shared copy across all Radix components; cmdk keeps its own 1.0.x copies so the command palette is untouched.",
+  "overrides": {
+    "@radix-ui/react-dismissable-layer": "1.1.12",
+    "@radix-ui/react-focus-scope": "1.1.7",
+    "cmdk": {
+      "@radix-ui/react-dismissable-layer": "1.0.5",
+      "@radix-ui/react-focus-scope": "1.0.4"
+    }
   }
 }

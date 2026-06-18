@@ -18,12 +18,19 @@ Outputs:
                              lifted to Z = time and coloured by available
                              activity time. The frontend mirrors this to a
                              ground-projected sibling = the flat 2-D PPA.
-    [1] prism-anchors      — anchor A/B markers (start/end).
+    [1] ppa-dwell-surface  — flat H3 cells aggregated from *all* reachable
+                             edges, coloured by best available activity time.
+                             The default main-map rendering (the 3-D stack is
+                             only legible in the focused single-prism view).
+    [2] prism-anchors      — anchor A/B markers (start/end).
+
+When the PPA is empty the surface is omitted and only [empty, anchors] return.
 """
 from __future__ import annotations
 
 import logging
 import math
+from time import perf_counter
 from typing import Any
 
 import geopandas as gpd
@@ -31,7 +38,8 @@ import numpy as np
 from shapely.geometry import LineString
 
 from ...constants import PROCESSED_HEIGHT_FIELD
-from .road_network import _auto_utm_crs
+from .dwell_surface import dwell_surface_gdf
+from .road_network import _auto_utm_crs, _parse_timestamps
 from .gps_road_network import (
     _anchors_gdf,
     _empty_gdf,
@@ -46,16 +54,31 @@ from .ppa_engine import (
     make_mode_profile,
     snap_origin_to_graph,
 )
+from .ppa_engine.speed_adjust import resolve_speed_factor
 from .ppa_engine.two_anchor import (
     compute_ppa_fast,
     shortest_path_sec,
 )
+from .timing import log_phase
 
 logger = logging.getLogger(__name__)
 
 # Above this multiple of the per-mode download cap the prism is too large to be
 # represented by a cap-sized corridor — fail fast with guidance instead.
 _CLAMP_FACTOR = 4.0
+
+# Highway tags treated as "minor" and dropped from the rendered result (the
+# reachability search still uses the full graph, so this only declutters what is
+# drawn — major corridors stay continuous). Mode-aware so a mode's primary
+# network is never gutted: for walking/cycling, footways/paths/residential are
+# the main network and are kept; only incidental connectors are dropped.
+_MINOR_HIGHWAYS: dict[str, frozenset[str]] = {
+    "driving": frozenset({"residential", "living_street", "service", "track", "unclassified"}),
+    "transit": frozenset({"residential", "living_street", "service", "track", "unclassified"}),
+    "custom": frozenset({"residential", "living_street", "service", "track", "unclassified"}),
+    "walking": frozenset({"service", "track", "steps", "corridor", "platform"}),
+    "cycling": frozenset({"service", "track", "steps", "corridor", "platform"}),
+}
 
 
 def execute_network_anchor_prism(
@@ -66,21 +89,34 @@ def execute_network_anchor_prism(
     z_start: float,
     z_end: float,
     total_height: float,
+    trajectory_gdf: gpd.GeoDataFrame | None = None,
+    time_field: str | None = None,
 ) -> list[gpd.GeoDataFrame]:
     """Compute the two-anchor network prism between A (p1) and B (p2).
 
     p1/p2 carry ``lng``, ``lat``, ``alt`` and ``timestamp`` (ms). The Z scale
     (z_start, z_end, total_height) is supplied by the caller so the prism lines
-    up with the rendered trajectory's height axis.
+    up with the rendered trajectory's height axis. trajectory_gdf (optional)
+    is the GPS trajectory — used by speedAdjustment='auto' to calibrate real
+    travel speeds from observed movement.
 
     Options consumed:
         speedMode / customSpeed   travel mode + custom km/h
+        speedAdjustment           'off' (default) | 'auto' | 'manual' — adjust
+                                  free-flow speeds for real conditions: 'auto'
+                                  calibrates from the GPS trajectory (fallback:
+                                  time-of-day congestion factor), 'manual' uses
+                                  speedFactor
+        speedFactor               real speed = factor x profile speed ('manual')
         minActivityMinutes        A_min (default 5)
         totalBudgetMinutes        T override (default: t_B - t_A)
         timeSlices                number of 3-D slices (default 12)
         roadNetworkData / Path    explicit road network (else OSM auto-download)
         autoDownloadOSM           default True
         maxAnalysisAreaKm2        raise the OSM extent cap
+        dropMinorRoads            drop residential/service/… from the result
+                                  (default True; mode-aware, best-effort)
+        maxRenderSegments         max drawn segments before subsampling (default 200k)
     """
     t1, t2 = int(p1["timestamp"]), int(p2["timestamp"])
     dt_ms = t2 - t1
@@ -108,6 +144,7 @@ def execute_network_anchor_prism(
     z_b = float(p2.get("alt", z_end) or 0.0)
 
     # ── Resolve the road network ────────────────────────────────────────────
+    _t = perf_counter()
     lons = np.array([p1["lng"], p2["lng"]], dtype=np.float64)
     lats = np.array([p1["lat"], p2["lat"]], dtype=np.float64)
     roads_wgs84 = _load_road_network_gdf(options)
@@ -118,6 +155,7 @@ def execute_network_anchor_prism(
             profile, budget_k,
             anchor_a=p1, anchor_b=p2, warnings=osm_warnings,
             max_area_km2=float(raw_cap) if raw_cap is not None else None,
+            research_area=options.get("_researchArea"),
         )
     for msg in osm_warnings:
         logger.info("network-prism-osm: %s", msg)
@@ -131,6 +169,23 @@ def execute_network_anchor_prism(
             "dataset, or enable OSM auto-download."
         )
 
+    # Pre-clip the road network to the research area (when defined). Keeps whole
+    # segments that touch the area so LineString geometry stays intact for the
+    # graph builder, while bounding the network — and the resulting prism — to it.
+    research_geom = _research_area_geom(options.get("_researchArea"))
+    if research_geom is not None:
+        clipped = _segments_intersecting(roads_wgs84, research_geom).copy()
+        if clipped.empty:
+            logger.info("network-prism: research area excluded all roads; using unclipped network")
+        else:
+            logger.info(
+                "network-prism: clipped road network to research area (%d → %d segments)",
+                len(roads_wgs84), len(clipped),
+            )
+            roads_wgs84 = clipped
+
+    _t = log_phase(f"network-prism: resolve roads ({len(roads_wgs84)} segments)", _t)
+
     # ── Build / fetch the cached road graph ─────────────────────────────────
     centroid_lon = float(np.mean(lons))
     centroid_lat = float(np.mean(lats))
@@ -138,6 +193,7 @@ def execute_network_anchor_prism(
     graph, edge_index = get_or_build_graph(roads_wgs84, metric_crs, profile)
     if graph.n_edges == 0:
         raise ValueError("The road network produced no routable edges.")
+    _t = log_phase(f"network-prism: build/cache graph ({graph.n_edges} edges)", _t)
 
     # Safety backstop only — the vectorised PPA is O(edges) so large graphs
     # compute fine; this just guards against a pathological multi-million-edge
@@ -165,16 +221,35 @@ def execute_network_anchor_prism(
             f"Anchor {which} is too far from any road "
             f"(> {profile.max_snap_m:.0f} m). Pick a point closer to the network."
         )
+    _t = log_phase("network-prism: snap anchors A+B", _t)
+
+    # ── Realistic speed factor (speedAdjustment) ────────────────────────────
+    # real speed = factor × profile speed. The cached graph stays in free-flow
+    # units; we run Dijkstra with the cutoff scaled to graph units and convert
+    # travel times back to real seconds via time_scale = 1/factor.
+    speed_factor, speed_note = resolve_speed_factor(
+        options,
+        graph=graph, edge_index=edge_index, profile=profile,
+        trajectory_points=_trajectory_points(trajectory_gdf, time_field),
+        window_mid_ms=(t1 + t2) / 2.0,
+        anchor_lon=float(p1["lng"]),
+    )
+    time_scale = 1.0 / speed_factor
+    if speed_note:
+        logger.info("network-prism: %s", speed_note)
+    budget_k_graph = budget_k * speed_factor   # cutoff in graph (free-flow) units
 
     # ── Two bounded Dijkstra searches (forward from A, backward from B) ──────
     dist_a, cand_a = bounded_dijkstra(
-        graph, snap_a.seeds, budget_k, snap_edge_id=snap_a.edge_id,
+        graph, snap_a.seeds, budget_k_graph, snap_edge_id=snap_a.edge_id,
     )
+    _t = log_phase(f"network-prism: Dijkstra forward A ({len(cand_a)} edges)", _t)
     dist_b, cand_b = bounded_dijkstra(
-        graph, snap_b.seeds, budget_k, snap_edge_id=snap_b.edge_id,
+        graph, snap_b.seeds, budget_k_graph, snap_edge_id=snap_b.edge_id,
     )
+    _t = log_phase(f"network-prism: Dijkstra backward B ({len(cand_b)} edges)", _t)
 
-    sp_sec = shortest_path_sec(dist_a, snap_b)
+    sp_sec = shortest_path_sec(dist_a, snap_b) * time_scale
     if not np.isfinite(sp_sec) or sp_sec > budget_k + 1e-6:
         sp_txt = "unreachable" if not np.isfinite(sp_sec) else f"{sp_sec / 60:.1f} min"
         raise ValueError(
@@ -192,6 +267,10 @@ def execute_network_anchor_prism(
     fast = compute_ppa_fast(
         graph, dist_a, dist_b, candidate_edges,
         total_budget_sec, min_activity_sec, z_start, z_end,
+        time_scale=time_scale,
+    )
+    _t = log_phase(
+        f"network-prism: compute PPA ({0 if fast is None else len(fast)} reachable edges)", _t,
     )
 
     outputs: list[gpd.GeoDataFrame] = []
@@ -200,14 +279,40 @@ def execute_network_anchor_prism(
         outputs.append(_anchors_gdf(p1, p2, t1, t2, z_a, z_b))
         return outputs
 
-    # Render cap: keep the payload (and per-edge feature build) bounded by
-    # uniformly subsampling the reachable edges when there are too many.
-    max_render = max(1000, int(options.get("maxRenderSegments", 50_000)))
-    n = len(fast)
-    sel = (
-        np.linspace(0, n - 1, max_render).astype(np.int64)
-        if n > max_render else np.arange(n)
-    )
+    # Drop minor roads (residential/service/…) for a cleaner, lighter result.
+    # Reachability was computed over the full graph, so this only changes what is
+    # drawn. Best-effort: if it would remove everything, keep all.
+    n_all = len(fast)
+    notes: list[str] = [speed_note] if speed_note else []
+    keep_mask = np.ones(n_all, dtype=bool)
+    if bool(options.get("dropMinorRoads", True)):
+        minor = _MINOR_HIGHWAYS.get(profile.mode, _MINOR_HIGHWAYS["driving"])
+        hw = [graph.edge_highway[int(e)] for e in fast.edge_id]
+        candidate = np.fromiter((h not in minor for h in hw), dtype=bool, count=n_all)
+        if candidate.any():
+            keep_mask = candidate
+            removed = int(n_all - int(candidate.sum()))
+            if removed:
+                notes.append(f"Removed {removed} minor-road segments ({profile.mode} hierarchy).")
+        else:
+            logger.info("network-prism: minor-road filter would remove all edges; keeping all")
+
+    kept_idx = np.flatnonzero(keep_mask)
+    n = kept_idx.size
+
+    # Render cap: bound the payload (and per-edge feature build) by uniformly
+    # subsampling only when the kept set is still very large. The default is
+    # sized for the frontend, not the algorithm: a long driving budget reaches
+    # the whole metro network (150k+ edges ≈ 120 MB of GeoJSON), which freezes
+    # the browser before the layer can render — leaving only the anchor markers
+    # on screen. 15k segments (~12 MB) still conveys the corridor and renders
+    # smoothly; raise options.maxRenderSegments for an offline/export run.
+    max_render = max(1000, int(options.get("maxRenderSegments", 15_000)))
+    if n > max_render:
+        sel = kept_idx[np.linspace(0, n - 1, max_render).astype(np.int64)]
+        notes.append(f"Subsampled {max_render} of {n} reachable segments (maxRenderSegments).")
+    else:
+        sel = kept_idx
 
     colors = _dwell_colors_vec(
         fast.activity_sec_min[sel], min_activity_sec, total_budget_sec,
@@ -219,6 +324,7 @@ def execute_network_anchor_prism(
     a_min, a_mid, a_max = (
         fast.activity_sec_min[sel], fast.activity_sec_mid[sel], fast.activity_sec_max[sel],
     )
+    fwd, bwd = fast.forward_sec[sel], fast.backward_sec[sel]
 
     features: list[dict] = []
     for i in range(sel.size):
@@ -245,18 +351,52 @@ def execute_network_anchor_prism(
             "total_budget_sec": float(total_budget_sec),
             "min_activity_sec": float(min_activity_sec),
             "shortest_path_sec": float(sp_sec),
+            # Forward/backward travel times let the focused view rebuild the
+            # discrete prism (forward∩backward cone per time slice).
+            "forward_sec": float(fwd[i]),
+            "backward_sec": float(bwd[i]),
             "color_rgba": colors[i],
         })
 
-    if n > max_render:
-        logger.info(
-            "network-prism: subsampled %d of %d reachable edges (maxRenderSegments)",
-            max_render, n,
-        )
+    for note in notes:
+        logger.info("network-prism: %s", note)
 
-    outputs.append(gpd.GeoDataFrame(features, crs="EPSG:4326"))
+    out_gdf = gpd.GeoDataFrame(features, crs="EPSG:4326")
+    if notes:
+        out_gdf.attrs["warnings"] = notes
+    outputs.append(out_gdf)
+    surface = dwell_surface_gdf(fast, total_budget_sec, min_activity_sec, options)
+    if surface is not None and not surface.empty:
+        outputs.append(surface)
     outputs.append(_anchors_gdf(p1, p2, t1, t2, z_a, z_b))
+    log_phase(f"network-prism: filter + build {len(features)} features", _t)
     return outputs
+
+
+def _trajectory_points(
+    gdf: gpd.GeoDataFrame | None, time_field: str | None
+) -> list[tuple[float, float, float]] | None:
+    """(lon, lat, t_ms) tuples from a GPS point trajectory, or None."""
+    if gdf is None or gdf.empty:
+        return None
+    pts = gdf[gdf.geometry.notna() & (gdf.geometry.geom_type == "Point")]
+    if len(pts) < 2:
+        return None
+    ts = None
+    for tf in ([time_field] if time_field else []) + ["_timestamp", "timestamp", "time"]:
+        if tf and tf in pts.columns:
+            try:
+                ts = _parse_timestamps(pts, tf)
+                break
+            except Exception:
+                continue
+    if ts is None or len(ts) != len(pts):
+        return None
+    return [
+        (float(geom.x), float(geom.y), float(t))
+        for geom, t in zip(pts.geometry, ts)
+        if not geom.is_empty
+    ]
 
 
 # Sequential blue→red dwell ramp (matches gps_road_network._DWELL_RAMP), as a
@@ -290,12 +430,33 @@ def _try_auto_download_osm_for_anchors(
     anchor_b: dict,
     warnings: list[str],
     max_area_km2: float | None,
+    research_area: dict | None = None,
 ) -> gpd.GeoDataFrame | None:
     """Reachability-ellipse extent around A/B → cached Overpass → road GeoDataFrame."""
     if budget_k <= 0:
         warnings.append("OSM auto-download skipped: no travel budget after activity.")
         return None
     bbox = _anchor_ellipse_bbox(anchor_a, anchor_b, profile, budget_k)
+
+    # When a research area is defined, only the part of the reachable extent that
+    # overlaps it can ever survive the output clip — so download just that. This
+    # shrinks the fetch (often under the cap, avoiding the "too large" failure).
+    research_geom = _research_area_geom(research_area)
+    if research_geom is not None:
+        clipped_bbox = _intersect_bbox(bbox, research_geom.bounds)
+        if clipped_bbox is None:
+            warnings.append(
+                "Research area does not overlap the reachable extent between the "
+                "anchors — cannot fetch a road network. Move the anchors inside "
+                "the research area or disable clipping."
+            )
+            return None
+        bbox = clipped_bbox
+        warnings.append(
+            f"Clipped OSM download extent to the research area "
+            f"({extent_area_km2(bbox):.1f} km²)."
+        )
+
     too_large, area, cap = is_extent_too_large(bbox, profile.mode, max_area_km2)
     if too_large:
         # When the prism is only modestly over the cap, a cap-sized corridor
@@ -318,15 +479,65 @@ def _try_auto_download_osm_for_anchors(
             f"cap for mode '{profile.mode}'; fetching only the central {cap:.0f} km² "
             f"corridor between the anchors — the prism is clipped to it."
         )
-    roads = fetch_or_cache_osm_roads(bbox, profile.mode)
+    source: list[str] = []
+    roads = fetch_or_cache_osm_roads(bbox, profile.mode, source_out=source)
     if roads is None or roads.empty:
         warnings.append("OSM auto-download returned no roads — Overpass may be down.")
         return None
+    # Report where the roads actually came from — a cache hit is not a download.
+    origin = {
+        "memory": "from the in-memory OSM cache",
+        "memory-extent": "from the in-memory OSM cache (clipped from a larger extent)",
+        "disk": "from the on-disk OSM cache",
+        "network": "downloaded from OSM",
+    }.get(source[0] if source else "", "from OSM")
     warnings.append(
-        f"Auto-downloaded {len(roads)} road segments from OSM for "
-        f"{extent_area_km2(bbox):.1f} km²."
+        f"{len(roads)} road segments {origin} for {extent_area_km2(bbox):.1f} km²."
     )
     return roads
+
+
+def _segments_intersecting(roads: gpd.GeoDataFrame, geom) -> gpd.GeoDataFrame:
+    """Whole road segments that intersect ``geom``.
+
+    Equivalent to ``roads[roads.intersects(geom)]`` but goes through the GEOS
+    STRtree spatial index (bbox prefilter in C, then an ``intersects`` refine on
+    only the candidates) instead of evaluating every segment in Python. On a
+    ~300k-segment metro network that is the difference between tens of seconds
+    and well under a second.
+    """
+    pos = roads.sindex.query(geom, predicate="intersects")
+    return roads.iloc[pos]
+
+
+def _research_area_geom(research_area: dict | None):
+    """Union of the research-area polygons as a single shapely geom (EPSG:4326).
+
+    Returns None when no area is supplied or it carries no usable geometry.
+    """
+    if not research_area:
+        return None
+    feats = research_area.get("features")
+    if feats is None and research_area.get("type") == "Feature":
+        feats = [research_area]
+    if not feats:
+        return None
+    area = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
+    geom = area.geometry.union_all()
+    return None if geom.is_empty else geom
+
+
+def _intersect_bbox(
+    b1: tuple[float, float, float, float], b2: tuple[float, float, float, float]
+) -> tuple[float, float, float, float] | None:
+    """Overlap of two (west, south, east, north) boxes, or None if disjoint."""
+    west = max(b1[0], b2[0])
+    south = max(b1[1], b2[1])
+    east = min(b1[2], b2[2])
+    north = min(b1[3], b2[3])
+    if east <= west or north <= south:
+        return None
+    return (west, south, east, north)
 
 
 def _corridor_bbox_to_area(

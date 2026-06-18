@@ -22,12 +22,14 @@ import {
   setSliceCount,
   setViewState,
 } from '@/stores/map-slice';
-import { buildDescriptorForDataset, buildLineSegments } from './deck-adapter';
+import { selectActiveResearchArea } from '@/stores/research-area-slice';
+import { buildDescriptorForDataset, buildLineSegments, buildPrismSheetPaths } from './deck-adapter';
 import { backendApiService } from '@/services/backend-api-service';
 import { normalizeBackendResponse } from '@/services/backend-normalizer';
 import type { FeatureCollection } from '@/interfaces/data-interfaces';
 import type { MapDataset, DeckLayerDescriptor, SelectedAnchor } from '@/interfaces/map-types';
-import { X, ArrowLeftRight, RotateCcw, Crosshair, ChevronUp, ChevronDown } from 'lucide-react';
+import { X, ArrowLeftRight, RotateCcw, Crosshair, Hammer } from 'lucide-react';
+import { BackendProgress } from './custom-components/backend-progress';
 
 const SPEED_PRESETS: Record<string, string> = {
   walking: 'Walking (5 km/h)',
@@ -36,6 +38,11 @@ const SPEED_PRESETS: Record<string, string> = {
   driving: 'Driving (60 km/h)',
   custom: 'Custom',
 };
+
+/** Identity of a buildable prism — anchors + params. Used to detect when the
+ *  on-screen result has gone stale relative to the current configuration. */
+const prismBuildKey = (a: SelectedAnchor, b: SelectedAnchor, params: PrismParams): string =>
+  `${a.lng},${a.lat},${a.timestamp}|${b.lng},${b.lat},${b.timestamp}|${JSON.stringify(params)}`;
 
 /**
  * Prism Explorer — floating panel for interactive space-time prism exploration.
@@ -47,10 +54,12 @@ export const PrismExplorerPanel: React.FC = () => {
     s => s.prismExplorer,
   );
   const mapDatasets = useAppSelector(s => s.map.datasets);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const activeResearchArea = useAppSelector(selectActiveResearchArea);
   const computeIdRef = useRef(0);
   const [computeError, setComputeError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  // Key of the anchors/params last built, so we can tell when the on-screen
+  // prism is stale. null = nothing built yet (button reads "Start Building").
+  const [builtKey, setBuiltKey] = useState<string | null>(null);
 
   // -----------------------------------------------------------------------
   // Compute prism & push results to map store
@@ -74,9 +83,9 @@ export const PrismExplorerPanel: React.FC = () => {
       let outputs: FeatureCollection[];
 
       if (params.prismMode === 'pasta') {
-        outputs = await computePASTA(anchorA, anchorB, params, mapDatasets, ownedDatasetIds);
+        outputs = await computePASTA(anchorA, anchorB, params, mapDatasets, ownedDatasetIds, activeResearchArea);
       } else {
-        outputs = await computeRoadNetworkSTP(anchorA, anchorB, params, mapDatasets, ownedDatasetIds);
+        outputs = await computeRoadNetworkSTP(anchorA, anchorB, params, mapDatasets, ownedDatasetIds, activeResearchArea);
       }
 
       // Stale guard
@@ -84,6 +93,13 @@ export const PrismExplorerPanel: React.FC = () => {
 
       const newDatasets: MapDataset[] = [];
       const newLayers: DeckLayerDescriptor[] = [];
+
+      // Captured during the loop for the on-map prism sheets built after it:
+      // the reachable-roads output plus the anchors' z heights — the prism's
+      // original z band on the main map.
+      let roadsForSheets: { fc: GeoJSON.FeatureCollection; datasetId: string } | null = null;
+      let sheetZStart = 0;
+      let sheetZEnd = 0;
 
       outputs.forEach((output, index) => {
         const dsType = (output.features[0]?.properties?._dataset_type as string) || '';
@@ -124,6 +140,24 @@ export const PrismExplorerPanel: React.FC = () => {
           descriptor.config.segmentData = buildLineSegments(cleanedOutput);
         }
 
+        // The single-height-per-edge 3D stack is superseded on the main map by
+        // the discrete prism sheets built below (same forward∩backward cone
+        // slicing as the Focused 3D View) — keep the layer available
+        // (toggleable in the legend) but off by default.
+        if (dsType === 'ppa-road-network') {
+          descriptor.isVisible = false;
+          roadsForSheets = { fc: cleanedOutput, datasetId };
+        }
+
+        if (dsType === 'prism-anchors') {
+          for (const f of cleanedOutput.features) {
+            const z = (f.properties?.z as number)
+              ?? (f.geometry?.type === 'Point' ? ((f.geometry.coordinates[2] as number) ?? 0) : 0);
+            if (f.properties?.anchor_role === 'start_anchor') sheetZStart = z;
+            if (f.properties?.anchor_role === 'end_anchor') sheetZEnd = z;
+          }
+        }
+
         newLayers.push(descriptor);
 
         // Mirror the PPA reachable-roads output as a ground-projected sibling
@@ -145,9 +179,48 @@ export const PrismExplorerPanel: React.FC = () => {
         }
       });
 
+      // The Focused 3D View's content on the regular map: the prism as
+      // discrete forward∩backward cone sheets, kept at the ORIGINAL z scale
+      // (anchor A at z_start, B at z_end) so it stays aligned with the
+      // trajectory's time axis instead of being re-stretched like the dialog.
+      let sheetSlices = 0;
+      // Assertion needed: TS does not track the assignment inside the forEach
+      // callback and would otherwise narrow roadsForSheets to null here.
+      const sheetsSource = roadsForSheets as { fc: GeoJSON.FeatureCollection; datasetId: string } | null;
+      if (sheetsSource) {
+        const { paths, nSlices } = buildPrismSheetPaths(
+          sheetsSource.fc, sheetZStart, sheetZEnd, Math.max(2, params.timeSlices),
+        );
+        if (paths.length) {
+          sheetSlices = nSlices;
+          newLayers.push({
+            id: `prism-explorer-prism-sheets-${id}`,
+            type: 'path',
+            datasetId: sheetsSource.datasetId,
+            label: 'Space-Time Prism (3D Sheets)',
+            isVisible: true,
+            opacity: 0.85,
+            color: [220, 90, 60],
+            config: {
+              pathData: paths,
+              widthScale: 3,
+              widthMinPixels: 1.5,
+              sheetFilter: true,
+              depthTest: false,
+            },
+          });
+        }
+      }
+
+      // Draw order: flat dwell surface at the bottom, ground roads above it,
+      // then the 3D sheets / (hidden) stack and the anchors on top.
+      newLayers.sort((a, b) => prismLayerRank(a.datasetId) - prismLayerRank(b.datasetId));
+
       dispatch(addDatasets(newDatasets));
       dispatch(addLayers(newLayers));
-      dispatch(setSliceCount(Math.max(1, params.timeSlices)));
+      // Align the animation steps with the sheet fractions i/(nSlices−1) so
+      // discrete stepping lands exactly on a sheet.
+      dispatch(setSliceCount(Math.max(1, sheetSlices > 0 ? sheetSlices - 1 : params.timeSlices)));
       dispatch(setAnimationProgress(1));
       dispatch(setAnimationPlaying(false));
       dispatch(
@@ -157,7 +230,8 @@ export const PrismExplorerPanel: React.FC = () => {
         }),
       );
 
-      // Auto-center map on prism with 3D tilt for visibility
+      // Auto-center on the prism with a 3D tilt: the regular view now carries
+      // the sliced prism alongside the flat dwell surface and ground roads.
       if (anchorA && anchorB) {
         const centerLng = (anchorA.lng + anchorB.lng) / 2;
         const centerLat = (anchorA.lat + anchorB.lat) / 2;
@@ -174,6 +248,7 @@ export const PrismExplorerPanel: React.FC = () => {
         }));
       }
 
+      setBuiltKey(prismBuildKey(anchorA, anchorB, params));
       dispatch(setReady());
     } catch (err) {
       console.error('Prism explorer compute error:', err);
@@ -182,7 +257,7 @@ export const PrismExplorerPanel: React.FC = () => {
         dispatch(setReady());
       }
     }
-  }, [anchorA, anchorB, params, dispatch, ownedDatasetIds, ownedLayerIds, mapDatasets]);
+  }, [anchorA, anchorB, params, dispatch, ownedDatasetIds, ownedLayerIds, mapDatasets, activeResearchArea]);
 
   // PASTA mode is currently disabled — coerce any persisted Redux state
   // (e.g. a user who last opened the panel on the PASTA branch) back to
@@ -195,23 +270,20 @@ export const PrismExplorerPanel: React.FC = () => {
   }, [params.prismMode, dispatch]);
 
   // -----------------------------------------------------------------------
-  // Auto-compute on anchor selection or param change (debounced)
+  // Manual build only — the prism never auto-runs. Each compute hits the
+  // backend, so it runs solely when the user clicks "Start Building". We just
+  // track whether the current anchors/params have diverged from the last
+  // build so the button can prompt a rebuild.
   // -----------------------------------------------------------------------
-  const anchorKey = anchorA && anchorB
-    ? `${anchorA.lng},${anchorA.lat},${anchorA.timestamp}|${anchorB.lng},${anchorB.lat},${anchorB.timestamp}`
-    : null;
+  const buildKey = anchorA && anchorB ? prismBuildKey(anchorA, anchorB, params) : null;
+  const isStale = buildKey !== null && builtKey !== null && buildKey !== builtKey;
 
-  const paramsKey = JSON.stringify(params);
-
+  // Forget the last build whenever a full anchor pair is no longer set (new
+  // pair, replaced B, explorer reopened) so the next build reads "Start
+  // Building" instead of "Rebuild".
   useEffect(() => {
-    if (!anchorKey) return;
-    setComputeError(null);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      computePrism();
-    }, 250);
-    return () => clearTimeout(debounceRef.current);
-  }, [anchorKey, paramsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!anchorA || !anchorB) setBuiltKey(null);
+  }, [anchorA, anchorB]);
 
   // -----------------------------------------------------------------------
   // Cleanup owned layers when explorer closes
@@ -237,32 +309,21 @@ export const PrismExplorerPanel: React.FC = () => {
   const hasAnchors = !!anchorA && !!anchorB;
 
   return (
-    <div className="absolute top-4 right-4 z-20 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm rounded-xl shadow-xl border border-blue-300 dark:border-blue-700 w-80 overflow-hidden">
+    <div className="h-full flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white shrink-0">
         <span className="text-sm font-bold tracking-wide">Space-Time Prism Explorer</span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setCollapsed(c => !c)}
-            className="p-1 hover:bg-white/20 rounded cursor-pointer"
-            title={collapsed ? 'Show panel' : 'Hide panel'}
-            aria-label={collapsed ? 'Show panel' : 'Hide panel'}
-          >
-            {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={handleClose}
-            className="p-1 hover:bg-white/20 rounded cursor-pointer"
-            title="Close explorer"
-            aria-label="Close explorer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <button
+          onClick={handleClose}
+          className="p-1 hover:bg-white/20 rounded cursor-pointer"
+          title="Close explorer"
+          aria-label="Close explorer"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
 
-      {!collapsed && (
-      <div className="p-4 space-y-4">
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
         {/* Anchor status */}
         <div className="space-y-2">
           <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -353,15 +414,43 @@ export const PrismExplorerPanel: React.FC = () => {
           </div>
         )}
 
+        {/* Build trigger — the prism computes only when clicked; it never
+            auto-runs. Disabled once a build matches the current config. */}
+        {hasAnchors && mode !== 'computing' && (
+          <div className="space-y-1.5">
+            {isStale && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
+                Anchors or parameters changed — rebuild to update the prism.
+              </p>
+            )}
+            <button
+              onClick={() => computePrism()}
+              disabled={builtKey !== null && !isStale}
+              className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-600 disabled:cursor-not-allowed rounded-md px-3 py-2 transition-colors cursor-pointer"
+            >
+              <Hammer className="w-4 h-4" />
+              {builtKey === null ? 'Start Building' : isStale ? 'Rebuild Prism' : 'Prism Up to Date'}
+            </button>
+          </div>
+        )}
+
         {/* Computing indicator */}
         {mode === 'computing' && (
-          <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
-            <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-            {params.prismMode === 'pasta'
-            ? 'Computing H3 potential path area…'
-            : params.prismMode === 'road-network-stp'
-              ? 'Intersecting forward & backward cones…'
-              : 'Computing space-time prism…'}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
+              <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              {params.prismMode === 'pasta'
+              ? 'Computing H3 potential path area…'
+              : params.prismMode === 'road-network-stp'
+                ? 'Intersecting forward & backward cones…'
+                : 'Computing space-time prism…'}
+            </div>
+            <BackendProgress
+              label="The backend is still running…"
+              barColor="bg-blue-500"
+              trackColor="bg-blue-200/60 dark:bg-blue-900/40"
+              textColor="text-blue-600 dark:text-blue-400"
+            />
           </div>
         )}
 
@@ -372,10 +461,24 @@ export const PrismExplorerPanel: React.FC = () => {
           </div>
         )}
       </div>
-      )}
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Labeled parameter section — groups related controls under a small heading
+// ---------------------------------------------------------------------------
+
+function ParamSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Anchor row sub-component
@@ -418,6 +521,7 @@ async function computePASTA(
   params: PrismParams,
   mapDatasets: Record<string, MapDataset>,
   ownedDatasetIds: string[],
+  researchArea: FeatureCollection | null,
 ): Promise<FeatureCollection[]> {
   const sourceData = buildPrismSourceData(mapDatasets, ownedDatasetIds);
 
@@ -446,6 +550,8 @@ async function computePASTA(
       h3Resolution: params.h3Resolution,
     },
     { time: '_timestamp' },
+    undefined,
+    researchArea ?? undefined,
   );
   if (!raw?.success) throw new Error(raw?.error ?? 'PASTA backend call failed');
   return normalizeBackendResponse(raw, 'pasta').outputs;
@@ -482,80 +588,85 @@ function PastaParams({
   return (
     <>
       {/* Travel speed */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Travel Speed</span>
-        <select
-          value={params.speedMode}
-          onChange={e => dispatch(updateParams({ speedMode: e.target.value }))}
-          className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
-        >
-          {Object.entries(SPEED_PRESETS).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
-          ))}
-        </select>
-      </label>
+      <ParamSection title="Travel speed">
+        <label className="block">
+          <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Travel Speed</span>
+          <select
+            value={params.speedMode}
+            onChange={e => dispatch(updateParams({ speedMode: e.target.value }))}
+            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
+          >
+            {Object.entries(SPEED_PRESETS).map(([val, label]) => (
+              <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        </label>
 
-      {params.speedMode === 'custom' && (
+        {params.speedMode === 'custom' && (
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Custom Speed: {params.customSpeed} km/h
+            </span>
+            <input
+              type="range" min={1} max={120} step={1}
+              value={params.customSpeed}
+              onChange={e => dispatch(updateParams({ customSpeed: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+          </label>
+        )}
+      </ParamSection>
+
+      {/* Time budget & activity */}
+      <ParamSection title="Time budget">
+        {hasTimestamps ? (
+          <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded px-2 py-1.5">
+            Time budget: <span className="font-medium text-gray-700 dark:text-gray-200">{budgetMin!.toFixed(1)} min</span> (from anchor timestamps)
+          </div>
+        ) : (
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Time Budget: {params.durationMinutes} min
+            </span>
+            <input
+              type="range" min={10} max={240} step={5}
+              value={params.durationMinutes}
+              onChange={e => dispatch(updateParams({ durationMinutes: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+          </label>
+        )}
+
         <label className="block">
           <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-            Custom Speed: {params.customSpeed} km/h
+            Min Activity Duration: {params.minActivityMinutes} min
           </span>
           <input
-            type="range" min={1} max={120} step={1}
-            value={params.customSpeed}
-            onChange={e => dispatch(updateParams({ customSpeed: Number(e.target.value) }))}
+            type="range" min={1} max={30} step={1}
+            value={params.minActivityMinutes}
+            onChange={e => dispatch(updateParams({ minActivityMinutes: Number(e.target.value) }))}
             className="w-full accent-blue-600"
           />
         </label>
-      )}
+      </ParamSection>
 
-      {/* Time budget */}
-      {hasTimestamps ? (
-        <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded px-2 py-1.5">
-          Time budget: <span className="font-medium text-gray-700 dark:text-gray-200">{budgetMin!.toFixed(1)} min</span> (from anchor timestamps)
-        </div>
-      ) : (
+      {/* Resolution */}
+      <ParamSection title="Resolution">
         <label className="block">
           <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-            Time Budget: {params.durationMinutes} min
+            H3 Resolution: {params.h3Resolution} ({H3_RESOLUTION_LABELS[params.h3Resolution] ?? ''}  cell edge)
           </span>
           <input
-            type="range" min={10} max={240} step={5}
-            value={params.durationMinutes}
-            onChange={e => dispatch(updateParams({ durationMinutes: Number(e.target.value) }))}
+            type="range" min={7} max={11} step={1}
+            value={params.h3Resolution}
+            onChange={e => dispatch(updateParams({ h3Resolution: Number(e.target.value) }))}
             className="w-full accent-blue-600"
           />
+          <span className="text-xs text-gray-400 mt-0.5 block">
+            Coarser (7) = fewer cells, faster · Finer (11) = more detail, slower
+          </span>
         </label>
-      )}
-
-      {/* Min activity duration */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          Min Activity Duration: {params.minActivityMinutes} min
-        </span>
-        <input
-          type="range" min={1} max={30} step={1}
-          value={params.minActivityMinutes}
-          onChange={e => dispatch(updateParams({ minActivityMinutes: Number(e.target.value) }))}
-          className="w-full accent-blue-600"
-        />
-      </label>
-
-      {/* H3 resolution */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          H3 Resolution: {params.h3Resolution} ({H3_RESOLUTION_LABELS[params.h3Resolution] ?? ''}  cell edge)
-        </span>
-        <input
-          type="range" min={7} max={11} step={1}
-          value={params.h3Resolution}
-          onChange={e => dispatch(updateParams({ h3Resolution: Number(e.target.value) }))}
-          className="w-full accent-blue-600"
-        />
-        <span className="text-xs text-gray-400 mt-0.5 block">
-          Coarser (7) = fewer cells, faster · Finer (11) = more detail, slower
-        </span>
-      </label>
+      </ParamSection>
     </>
   );
 }
@@ -572,89 +683,131 @@ function PPARoadNetworkParams({
   return (
     <>
       {/* Travel speed */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Travel Speed</span>
-        <select
-          value={params.speedMode}
-          onChange={e => dispatch(updateParams({ speedMode: e.target.value }))}
-          className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
-        >
-          {Object.entries(SPEED_PRESETS).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
-          ))}
-        </select>
-      </label>
+      <ParamSection title="Travel speed">
+        <label className="block">
+          <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Travel Speed</span>
+          <select
+            value={params.speedMode}
+            onChange={e => dispatch(updateParams({ speedMode: e.target.value }))}
+            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
+          >
+            {Object.entries(SPEED_PRESETS).map(([val, label]) => (
+              <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        </label>
 
-      {params.speedMode === 'custom' && (
+        {params.speedMode === 'custom' && (
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Custom Speed: {params.customSpeed} km/h
+            </span>
+            <input
+              type="range" min={1} max={120} step={1}
+              value={params.customSpeed}
+              onChange={e => dispatch(updateParams({ customSpeed: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+          </label>
+        )}
+
+        {/* Realistic-speed adjustment: free-flow class speeds overestimate
+            urban travel; this scales them to real conditions. */}
+        <label className="block">
+          <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">Speed Realism</span>
+          <select
+            value={params.speedAdjustment}
+            onChange={e => dispatch(updateParams({ speedAdjustment: e.target.value as PrismParams['speedAdjustment'] }))}
+            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
+          >
+            <option value="off">Free-flow (posted/class speeds)</option>
+            <option value="auto">Auto — calibrate from trajectory / time of day</option>
+            <option value="manual">Manual factor</option>
+          </select>
+          <span className="text-xs text-gray-400 mt-0.5 block">
+            Auto measures real speeds from the GPS trajectory; without usable
+            movement data it falls back to a rush-hour/time-of-day factor.
+          </span>
+        </label>
+
+        {params.speedAdjustment === 'manual' && (
+          <label className="block">
+            <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+              Speed Factor: ×{params.speedFactor.toFixed(2)}
+            </span>
+            <input
+              type="range" min={0.25} max={1.5} step={0.05}
+              value={params.speedFactor}
+              onChange={e => dispatch(updateParams({ speedFactor: Number(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+            <span className="text-xs text-gray-400 mt-0.5 block">
+              Real speed = factor × profile speed (0.55 ≈ urban rush hour)
+            </span>
+          </label>
+        )}
+      </ParamSection>
+
+      {/* Time budget & 3-D structure */}
+      <ParamSection title="Time budget">
         <label className="block">
           <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-            Custom Speed: {params.customSpeed} km/h
+            Min Activity Time A: {params.minActivityMinutes} min
           </span>
           <input
-            type="range" min={1} max={120} step={1}
-            value={params.customSpeed}
-            onChange={e => dispatch(updateParams({ customSpeed: Number(e.target.value) }))}
+            type="range" min={0} max={120} step={1}
+            value={params.minActivityMinutes}
+            onChange={e => dispatch(updateParams({ minActivityMinutes: Number(e.target.value) }))}
             className="w-full accent-blue-600"
           />
+          <span className="text-xs text-gray-400 mt-0.5 block">
+            Time budget T = anchor B time − anchor A time. A road is in the prism
+            when travel(A→x) + travel(x→B) + A ≤ T.
+          </span>
         </label>
-      )}
 
-      {/* Min activity duration A */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          Min Activity Time A: {params.minActivityMinutes} min
-        </span>
-        <input
-          type="range" min={0} max={120} step={1}
-          value={params.minActivityMinutes}
-          onChange={e => dispatch(updateParams({ minActivityMinutes: Number(e.target.value) }))}
-          className="w-full accent-blue-600"
-        />
-        <span className="text-xs text-gray-400 mt-0.5 block">
-          Time budget T = anchor B time − anchor A time. A road is in the prism
-          when travel(A→x) + travel(x→B) + A ≤ T.
-        </span>
-      </label>
-
-      {/* Time slices — number of stacked 3-D levels in the prism */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          Time Slices: {params.timeSlices}
-        </span>
-        <input
-          type="range" min={2} max={30} step={1}
-          value={params.timeSlices}
-          onChange={e => dispatch(updateParams({ timeSlices: Number(e.target.value) }))}
-          className="w-full accent-blue-600"
-        />
-        <span className="text-xs text-gray-400 mt-0.5 block">
-          Vertical levels of the 3-D prism between A and B · the flat 2-D PPA is
-          their projection
-        </span>
-      </label>
+        {/* Time slices — number of stacked 3-D levels in the prism */}
+        <label className="block">
+          <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+            Time Slices: {params.timeSlices}
+          </span>
+          <input
+            type="range" min={2} max={30} step={1}
+            value={params.timeSlices}
+            onChange={e => dispatch(updateParams({ timeSlices: Number(e.target.value) }))}
+            className="w-full accent-blue-600"
+          />
+          <span className="text-xs text-gray-400 mt-0.5 block">
+            Vertical levels of the 3-D prism between A and B · the flat 2-D PPA is
+            their projection
+          </span>
+        </label>
+      </ParamSection>
 
       {/* Road network dataset */}
-      <label className="block">
-        <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
-          Road Network Dataset
-        </span>
-        <select
-          value={params.roadNetworkDatasetId}
-          onChange={e => dispatch(updateParams({ roadNetworkDatasetId: e.target.value }))}
-          className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
-        >
-          <option value="">Auto-download from OSM</option>
-          {Object.values(mapDatasets)
-            .filter(ds => !ds.id.startsWith('prism-explorer') && !ds.id.startsWith('shared-axes'))
-            .map(ds => (
-              <option key={ds.id} value={ds.id}>{ds.label}</option>
-            ))
-          }
-        </select>
-        <span className="text-xs text-gray-400 mt-0.5 block">
-          Pick a loaded road LineString dataset, or leave empty
-        </span>
-      </label>
+      <ParamSection title="Road network">
+        <label className="block">
+          <span className="text-xs text-gray-600 dark:text-gray-300 mb-1 block">
+            Road Network Dataset
+          </span>
+          <select
+            value={params.roadNetworkDatasetId}
+            onChange={e => dispatch(updateParams({ roadNetworkDatasetId: e.target.value }))}
+            className="w-full text-sm border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1.5 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
+          >
+            <option value="">Auto-download from OSM</option>
+            {Object.values(mapDatasets)
+              .filter(ds => !ds.id.startsWith('prism-explorer') && !ds.id.startsWith('shared-axes'))
+              .map(ds => (
+                <option key={ds.id} value={ds.id}>{ds.label}</option>
+              ))
+            }
+          </select>
+          <span className="text-xs text-gray-400 mt-0.5 block">
+            Pick a loaded road LineString dataset, or leave empty
+          </span>
+        </label>
+      </ParamSection>
     </>
   );
 }
@@ -668,9 +821,12 @@ async function computeRoadNetworkSTP(
     roadNetworkDatasetId: string;
     minActivityMinutes: number;
     timeSlices: number;
+    speedAdjustment: string;
+    speedFactor: number;
   },
   mapDatasets: Record<string, MapDataset>,
   ownedDatasetIds: string[],
+  researchArea: FeatureCollection | null,
 ): Promise<FeatureCollection[]> {
   const sourceData = buildPrismSourceData(mapDatasets, ownedDatasetIds);
 
@@ -691,6 +847,9 @@ async function computeRoadNetworkSTP(
     // travel(A→x) + travel(x→B) + activity ≤ T.
     minActivityMinutes: params.minActivityMinutes,
     timeSlices: params.timeSlices,
+    // Realistic-speed adjustment — 'off' keeps free-flow profile speeds.
+    speedAdjustment: params.speedAdjustment,
+    speedFactor: params.speedFactor,
   };
   if (params.roadNetworkDatasetId && mapDatasets[params.roadNetworkDatasetId]) {
     options.roadNetworkData = mapDatasets[params.roadNetworkDatasetId].data;
@@ -701,6 +860,8 @@ async function computeRoadNetworkSTP(
     { type: 'FeatureCollection', features },
     options,
     { time: '_timestamp' },
+    undefined,
+    researchArea ?? undefined,
   );
 
   if (!raw?.success) {
@@ -708,6 +869,15 @@ async function computeRoadNetworkSTP(
   }
 
   return normalizeBackendResponse(raw, 'space-time-prism').outputs;
+}
+
+/** Main-map draw order for explorer layers (lower renders underneath). */
+function prismLayerRank(datasetId: string): number {
+  if (datasetId.includes('ppa-dwell-surface')) return 0;
+  if (datasetId.includes('ppa-road-network-ground')) return 1;
+  if (datasetId.includes('ppa-road-network')) return 2;
+  if (datasetId.includes('prism-anchors')) return 4;
+  return 3;
 }
 
 function buildPrismSourceData(

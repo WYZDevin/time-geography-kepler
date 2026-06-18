@@ -6,6 +6,7 @@ import workflowReducer from './workflow-slice';
 import dataReducer from './data-slice';
 import settingsReducer from './settings-slice';
 import mapReducer from './map-slice';
+import researchAreaReducer from './research-area-slice';
 import prismExplorerReducer from './prism-explorer-slice';
 import pinReducer from './pin-slice';
 import { persistenceMiddleware } from './persistence-middleware';
@@ -13,6 +14,7 @@ import { persistenceMiddleware } from './persistence-middleware';
 const store = configureStore({
   reducer: {
     map: mapReducer,
+    researchArea: researchAreaReducer,
     prismExplorer: prismExplorerReducer,
     pin: pinReducer,
     metadata: metadataReducer,

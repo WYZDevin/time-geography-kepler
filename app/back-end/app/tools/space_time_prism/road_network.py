@@ -1,5 +1,6 @@
 import math
 import os
+import time
 
 import geopandas as gpd
 import numpy as np
@@ -80,7 +81,10 @@ def _parse_timestamps(gdf: gpd.GeoDataFrame, time_field: str) -> np.ndarray:
         else:
             series = pd.to_datetime(col, unit="ms")
     else:
-        series = pd.to_datetime(col)
+        # format="mixed" infers per element — real-world exports mix string
+        # formats within one file, and bare pd.to_datetime infers the format
+        # from the first row only, then raises on the rest.
+        series = pd.to_datetime(col, format="mixed")
     if hasattr(series.dt, "tz") and series.dt.tz is not None:
         series = series.dt.tz_localize(None)
     return (series.astype("datetime64[ms]").astype(np.int64)).values
@@ -115,20 +119,55 @@ def _json_safe(val: Any) -> str | int | float | bool | None:
 _OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
+
+# Overpass etiquette: a descriptive User-Agent with contact info gets far fewer
+# 403/429 rejections than a generic one.
+_OVERPASS_HEADERS = {
+    "User-Agent": "time-geography-kepler/1.0 (academic research; contact: hanlin.zhou@uconn.edu)",
+    "Accept": "application/json",
+}
+# Per-mirror retries for transient failures (429 rate-limit, 5xx, timeouts).
+_OVERPASS_RETRIES = 2
+# Status codes worth retrying the *same* mirror after a backoff.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+# Auto-download road-class filter per mode. ``None`` (default) downloads every
+# highway. For vehicle modes we fetch only the through-road network (no
+# residential/service) so a large-extent trip stays a tractable download — this
+# matches the default minor-road removal applied to the rendered result, and is
+# what a driving trip of any distance actually uses.
+_DOWNLOAD_HIGHWAYS: dict[str, tuple[str, ...]] = {
+    "driving": (
+        "motorway", "motorway_link", "trunk", "trunk_link", "primary",
+        "primary_link", "secondary", "secondary_link", "tertiary",
+        "tertiary_link", "unclassified",
+    ),
+    "transit": (
+        "motorway", "trunk", "primary", "secondary", "tertiary",
+        "primary_link", "secondary_link", "tertiary_link", "unclassified",
+        "residential",
+    ),
+}
 
 
 def _fetch_osm_roads(
     bbox_wgs84: tuple[float, float, float, float],
     buffer_deg: float = 0.005,
+    mode: str | None = None,
 ) -> gpd.GeoDataFrame | None:
     """Download road network from OSM Overpass API for the given WGS-84 bbox.
 
     bbox_wgs84 : (minx, miny, maxx, maxy)
     buffer_deg : padding added to each side before querying (≈ 500 m at mid-latitudes)
+    mode       : travel mode; restricts which highway classes are fetched
+                 (see ``_DOWNLOAD_HIGHWAYS``). ``None`` fetches all highways.
 
-    Tries multiple Overpass mirrors in order; raises RuntimeError if all fail.
+    Tries multiple Overpass mirrors, each with a short retry/backoff for transient
+    errors (429/5xx/timeouts); raises RuntimeError only if every mirror fails.
     Returns a GeoDataFrame of LineString roads in EPSG:4326, or None on failure.
     """
     minx, miny, maxx, maxy = bbox_wgs84
@@ -137,31 +176,48 @@ def _fetch_osm_roads(
     north = maxy + buffer_deg
     east  = maxx + buffer_deg
 
+    classes = _DOWNLOAD_HIGHWAYS.get(mode or "")
+    hw_selector = f'["highway"~"^({"|".join(classes)})$"]' if classes else '["highway"]'
     query = (
-        f'[out:json][timeout:30];'
-        f'(way["highway"]({south},{west},{north},{east}););'
+        f'[out:json][timeout:90];'
+        f'(way{hw_selector}({south},{west},{north},{east}););'
         f'out body;>;out skel qt;'
     )
 
     last_exc: Exception | None = None
+    data = None
     for url in _OVERPASS_URLS:
-        try:
-            resp = requests.post(
-                url,
-                data={"data": query},
-                headers={"User-Agent": "time-geography-kepler/1.0"},
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            break  # success
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
-                requests.exceptions.HTTPError) as exc:
-            last_exc = exc
-            continue
-        except Exception as exc:
-            raise RuntimeError(f"OSM auto-fetch failed: {exc}") from exc
-    else:
+        for attempt in range(_OVERPASS_RETRIES):
+            try:
+                resp = requests.post(
+                    url,
+                    data={"data": query},
+                    headers=_OVERPASS_HEADERS,
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                break  # success on this mirror
+            except requests.exceptions.HTTPError as exc:
+                last_exc = exc
+                status = exc.response.status_code if exc.response is not None else None
+                # Retry the same mirror only for transient server-side codes;
+                # for 403/404 etc. move on to the next mirror immediately.
+                if status in _RETRYABLE_STATUS and attempt + 1 < _OVERPASS_RETRIES:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_exc = exc
+                if attempt + 1 < _OVERPASS_RETRIES:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+            except Exception as exc:
+                raise RuntimeError(f"OSM auto-fetch failed: {exc}") from exc
+        if data is not None:
+            break
+    if data is None:
         raise RuntimeError(
             f"All Overpass API mirrors failed. Last error: {last_exc}. "
             "Try again later or load a road network dataset manually."
@@ -185,6 +241,7 @@ def _fetch_osm_roads(
         rows.append({
             "geometry": LineString(coords),
             "highway": tags.get("highway", ""),
+            "maxspeed": tags.get("maxspeed", ""),
             "name": tags.get("name", ""),
             "osm_id": e["id"],
         })

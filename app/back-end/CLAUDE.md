@@ -97,7 +97,11 @@ Your `POST` payload parser for `/execute` must anticipate `request.json` looking
     "visualizeStay": False, 
     "bufferDistance": 100,
     // ... Any arbitrary kwargs passed via the UI
-  }
+  },
+  // Optional. GeoJSON Feature or FeatureCollection of polygons. When present,
+  // every output FeatureCollection is filtered to features intersecting it
+  // (see `filter_to_research_area` in app/utils.py). Whole features are kept.
+  "researchArea": { "type": "FeatureCollection", "features": [...] }
 }
 ```
 

@@ -83,6 +83,8 @@ Add a flat (2D) trajectory view alongside the existing 3D Space-Time Cube, and a
 
 ---
 
+1. Add starting match the date - . 2. add 2d projection of the trajection. 3. add 
+
 ## Priority / Notes
 
 | # | Item | Effort estimate | Notes |
