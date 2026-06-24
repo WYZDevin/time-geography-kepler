@@ -95,20 +95,27 @@ Go to:
 You should see the **Space-Time Analytics Platform** home screen. That's it — the
 app is running on your own computer.
 
+![Initial page](/getting-started/initial-page.png)
+
 ## Step 4 — Run your first space-time analysis
 
 Now turn that running app into a real result. A **space-time analysis** plots your
 movement data in 3D, where height — the **Z axis** — is **time**, so a trajectory
 climbs as the day goes on.
 
-1. **Load a trajectory.** Open the **Data** panel and choose **Upload → GeoJSON
+1. **Load a trajectory.** Open the **Data** panel and choose **Upload → CSV
    File**. Don't have data yet? Download this small sample first, then upload it:
-   [sample-trajectory.geojson](https://github.com/WYZDevin/time-geography-kepler/raw/main/app/front-end/e2e/fixtures/sample-trajectory.geojson).
+   [day3_2026-06-13.csv](https://github.com/WYZDevin/time-geography-kepler/raw/main/demo-datasets/individual/day3_2026-06-13.csv)
+   — one real person's GPS trace for a single day (June 13, 2026; ~800 points, a
+   clean home → activity → home round trip). In the **Map Coordinate Columns**
+   step, the **longitude**, **latitude**, and **altitude** columns are detected
+   automatically — just confirm and finish.
 2. **Pick a tool.** On the **Select Analysis Tool** screen, choose **3D
    Trajectory** — the simplest space-time view and the best place to start.
-3. **Map the Datetime Column.** Point it at the field holding each point's
-   timestamp (in the sample it's `timestamp`). This step is required — the time
-   axis depends on it.
+3. **Check the Datetime Column.** The app auto-detects the time column — `dataTime`
+   in this sample — and pre-fills it, so you can leave it as-is. The time axis
+   depends on this field, so if it's ever empty, pick the column holding your
+   timestamps.
 4. **Run & explore.** Click **Run Analysis**, then **drag to rotate** the map so
    the vertical time axis comes into view. Hover any point to read its values.
 
