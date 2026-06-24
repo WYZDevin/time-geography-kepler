@@ -27,7 +27,7 @@ good coverage and variety:
 |------|------|-------:|-----:|-------------------:|
 | `day1_2026-02-21.csv` | 2026-02-21 | 1076 | 22.6 h | 25.5 km |
 | `day2_2026-04-11.csv` | 2026-04-11 | 1022 | 15.6 h | 39.2 km (wide excursion) |
-| `day3_2026-06-13.csv` | 2026-06-13 |  817 | 20.2 h | 29.4 km (clean round trip) |
+| `example_1.csv` | 2026-06-13 |  817 | 20.2 h | 29.4 km (clean round trip) |
 
 Upload one and run the **3D Trajectory** tool to see a single person's space-time path.
 

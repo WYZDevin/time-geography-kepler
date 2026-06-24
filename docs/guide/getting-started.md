@@ -105,7 +105,7 @@ climbs as the day goes on.
 
 1. **Load a trajectory.** Open the **Data** panel and choose **Upload → CSV
    File**. Don't have data yet? Download this small sample first, then upload it:
-   [day3_2026-06-13.csv](https://github.com/WYZDevin/time-geography-kepler/raw/main/demo-datasets/individual/day3_2026-06-13.csv)
+   [example_1.csv](https://github.com/WYZDevin/time-geography-kepler/raw/main/demo-datasets/individual/example_1.csv)
    — one real person's GPS trace for a single day (June 13, 2026; ~800 points, a
    clean home → activity → home round trip). In the **Map Coordinate Columns**
    step, the **longitude**, **latitude**, and **altitude** columns are detected
