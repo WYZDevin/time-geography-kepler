@@ -99,90 +99,78 @@ app is running on your own computer.
 
 ## Step 4 — Run your first space-time analysis
 
-Now turn that running app into a real result. A **space-time analysis** plots your
-movement data in 3D, where height — the **Z axis** — is **time**, so a trajectory
-climbs as the day goes on.
+With the app open, you'll work through two things on the same dataset: first
+**visualize a GPS trajectory in 3D**, then build a **Space-Time Prism** from it.
+Both run on the sample below — no data of your own required.
+
+### Visualize the trajectory in 3D
 
 1. **Load a trajectory.** Open the **Data** panel and choose **Upload → CSV
    File**. Don't have data yet? Download this small sample first, then upload it:
    [example_1.csv](https://github.com/WYZDevin/time-geography-kepler/raw/main/demo-datasets/individual/example_1.csv)
-   — one real person's GPS trace for a single day (June 13, 2026; ~800 points, a
-   clean home → activity → home round trip). In the **Map Coordinate Columns**
-   step, the **longitude**, **latitude**, and **altitude** columns are detected
-   automatically — just confirm and finish.
+   — one real person's GPS trace for a single day (~800 points, a clean
+   home → activity → home round trip). In the **Map Coordinate Columns** step,
+   the **longitude**, **latitude**, and **altitude** columns are detected
+   automatically, so just confirm and finish.
+
+   ![Upload data](/getting-started/data-source.png)
+   ![Map columns](/getting-started/map-columns.png)
+
 2. **Pick a tool.** On the **Select Analysis Tool** screen, choose **3D
-   Trajectory** — the simplest space-time view and the best place to start.
-3. **Check the Datetime Column.** The app auto-detects the time column — `dataTime`
-   in this sample — and pre-fills it, so you can leave it as-is. The time axis
-   depends on this field, so if it's ever empty, pick the column holding your
-   timestamps.
-4. **Run & explore.** Click **Run Analysis**, then **drag to rotate** the map so
-   the vertical time axis comes into view. Hover any point to read its values.
+   Trajectory** — it plots your GPS points in 3D so you can inspect the path
+   before analyzing it.
 
-🎉 That's a complete space-time analysis. From here, try the analytical tools —
-[Space-Time Kernel Density](/tools/stkde), [Space-Time Cube](/tools/space-time-cube),
-and [Space-Time Prism](/tools/space-time-prism) — or read the full
-[Running an Analysis](/guide/workflow) walkthrough.
+   ![Select the 3D Trajectory tool](/getting-started/select-tool.png)
 
----
+3. **Check the datetime column.** The app auto-detects the time column —
+   `dataTime` in this sample — and pre-fills it, so you can leave it as-is. The
+   vertical time axis depends on this field, so if it's ever empty, pick the
+   column that holds your timestamps. Feel free to explore the other settings.
 
-## Managing the app
+   ![Check the datetime column](/getting-started/tool-setting.png)
 
-Once you've run your first analysis, here's how to keep the app running day to day.
+4. **Run and explore.** Click **Run Analysis**, then **right-click and drag** to
+   rotate the map until the vertical time axis comes into view. Hover any point
+   to read its values.
 
-### Start, stop, and restart
+   ![Visualized trajectory](/getting-started/visualized-trajectory.png)
 
-**The easy way (Docker Desktop):** open **Docker Desktop** and click the
-**Containers** tab on the left. You'll see **tgk-frontend** and **tgk-backend**,
-each showing a green **Running** status. With no typing, you can:
+That's a complete space-time visualization. From here you can try the analytical
+tools — [Space-Time Kernel Density](/tools/stkde),
+[Space-Time Cube](/tools/space-time-cube), and
+[Space-Time Prism](/tools/space-time-prism). Let's build a Space-Time Prism
+together.
 
-- Click the **`5173:80`** port link next to **tgk-frontend** to open the app.
-- Press **Stop** (■) to shut a part down, and **Start** (▶) to run it again later.
-- Click a container to watch its logs if something looks wrong.
+### Build a Space-Time Prism
 
-**From the terminal:**
+1. **Set the start and end anchors.** Click the home location on the map to drop
+   the **start anchor**, then click one of the stays to drop the **end anchor**.
+   The prism will fill the space-time region the person could have reached
+   between these two points.
 
-```bash
-docker stop tgk-frontend tgk-backend     # stop the app
-docker start tgk-frontend tgk-backend    # start it again later
-```
+   ![Select the home location as the start anchor](/getting-started/select-home-anchor.png)
+   ![Select an activity stay as the end anchor](/getting-started/select-end-anchor.png)
 
-### Update to the latest version
+2. **Configure the prism.** Click **Build Space-Time Prism**, and the settings
+   panel opens on the right side of the map. Adjust it to your needs. This
+   example uses a **60 km/h** travel speed with no speed adjustment
+   (**Free-flow**). To make the speed approximate the user's actual travel speed,
+   switch **Free-flow** to **Auto**.
 
-To pick up the newest release, download fresh images and recreate the app:
+   ![Space-Time Prism settings](/getting-started/stp-tool-setting.png)
 
-```bash
-docker pull yongzwu/time-geography-backend:latest
-docker pull yongzwu/time-geography-frontend:latest
-docker rm -f tgk-backend tgk-frontend
-```
+3. **Run it.** Click **Run**. The prism is computed on your own computer and can
+   take anywhere from under a minute to several minutes, depending on your
+   settings. When it finishes, a heat map of the potential dwell time appears,
+   alongside a 3D rendering of that dwell surface.
 
-Then run the two commands from **Step 2** again.
+   ![Space-Time Prism result](/getting-started/stp-result.png)
 
-### Advanced: run from the source code
+4. **Take a closer look.** For a closer view, click **Focused 3D View** at the
+   bottom-left of the map. It zooms in on the prism and clearly shows the
+   potential path area at each time slice between the start and end anchors.
+   **Right-click and drag** to change the viewing angle, or press the play button
+   to animate the prism over time.
 
-Prefer to build it yourself — for example, to change the code? Get the project and
-use Docker Compose instead:
+   ![Focused 3D View](/getting-started/stp-focused.png)
 
-1. Open **<https://github.com/WYZDevin/time-geography-kepler>**, click the green
-   **`<> Code`** button → **Download ZIP**, and unzip it.
-2. Open a terminal **inside** the unzipped folder.
-3. Run one of:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml up   # pull the ready-made images
-   docker compose up --build                       # build from your local code
-   ```
-
-The app opens at the same address: <http://localhost:5173>.
-
-## Troubleshooting
-
-| Problem | What to do |
-|---------|------------|
-| **"Cannot connect to the Docker daemon"** | Docker Desktop isn't running — open it, wait for "Docker Desktop is running", then try Step 2 again. |
-| **The command isn't found** (`docker: command not found`) | Docker Desktop isn't installed correctly — reinstall it (Step 1) and restart your computer. |
-| **"name is already in use"** | You already set the app up. Don't re-run the commands — press **▶ Start** in Docker Desktop, or remove the old containers with `docker rm -f tgk-backend tgk-frontend` and run Step 2 again. |
-| **First start is slow / stuck on downloads** | The first run downloads the app — a few minutes is normal. Let it finish; later starts are instant. |
-| **Nothing loads at `localhost:5173`** | Give it a few seconds after Step 2, check both parts show **Running** in Docker Desktop, then refresh the browser. |
-| **"Port is already in use"** | Another program is using port 5173 or 8000. Close it (or restart your computer), then try Step 2 again. |

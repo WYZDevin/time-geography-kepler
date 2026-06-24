@@ -9,33 +9,22 @@ Given two known points in space and time (*"here at 9:00, there at 10:00"*), the
 **space-time prism** is everything reachable in between. Its ground shadow is the
 **Potential Path Area (PPA)**.
 
-Unlike the other tools, the prism is driven by the **Prism Explorer** — a
-floating panel where you place anchors directly on the map.
+Unlike the other tools, the prism is driven by the **Prism Explorer** after you
+finish running the **3D Trajectory** tool. It's a floating panel where you place
+anchors directly on the map.
 
 ## Getting the tool
 
-- **Where:** click **Start Prism Explorer** (bottom-left of the map) — the prism
-  is *not* in the regular tool picker; it has its own panel.
-- **Network access:** the explorer downloads OSM roads for the anchor extent at
-  run time, so it needs network access to OSM (the result is cached on disk for
-  reuse).
-- **Input:** two anchors A and B placed on the map (each carrying a location and a
-  time). Anchors may snap to data points or be picked freely. No dataset is
-  strictly required, but the time budget comes from the two anchors' timestamps.
-- **Disabled while** [pin-point mode](/guide/map-controls#pin-point-mode) is
-  active — turn pins off to use it.
+Note 1: In order to compute a Space-Time Prism, please first run the **3D Trajectory** tool. You may check [Getting Started](/guide/getting-started) for detailed steps.
+
+Note 2: The tool downloads OSM roads for the anchor extent at run time, so it needs network access to OSM (the result is cached on disk for reuse).
+
+Note 3: The tool is disabled while [pin-point mode](/guide/map-controls#pin-point-mode) is active — turn pins off to use it.
 
 ## Opening the explorer
 
 Click **Start Prism Explorer** (bottom-left of the map). The panel appears and
 the map enters anchor-selection mode.
-
-::: tip Hide vs. close
-The panel header has two buttons:
-- **Hide** (chevron) collapses the panel but keeps the explorer active — the
-  prism stays on the map and you can re-open the controls anytime.
-- **Close** (✕) exits the explorer and removes its layers.
-:::
 
 ## Placing anchors
 
@@ -66,7 +55,7 @@ map enters anchor-selection mode.
 Click the map to drop **Anchor A**, then **Anchor B**. The panel then shows the
 travel parameters: **Travel Speed** (mode profile), **Speed Realism**, the
 **Time Budget** (here 45 min, taken from the two anchor timestamps), **Min
-Activity Duration**, **Time Slices**, and the **Road Network** source
+Activity Time**, **Time Slices**, and the **Road Network** source
 (auto-downloaded from OSM for the anchors' extent).
 
 ![Both anchors placed with parameters and Start Building](/screenshots/prism-anchors.png)
@@ -135,23 +124,48 @@ its own single-cone round-trip PPA.
 
 ## Options
 
-| Option | Key | Default | Description |
-|--------|-----|---------|-------------|
-| **Prism Mode** | `prismMode` | PPA Road Network | The reachability model (see below). |
-| **Speed** | `speedMode` | Walking (5 km/h) | Maximum travel speed / mode profile: Walking 5 · Cycling 15 · Transit 30 · Driving 60 · Custom. Sets the graph's travel times. |
-| **Custom speed** | `customSpeed` | 5 km/h | Used when Speed is set to *Custom*. |
-| **Speed Realism** | `speedAdjustment` | Free-flow (`off`) | Adjust free-flow profile speeds to real conditions. `auto` calibrates a personal speed factor from the loaded GPS trajectory (observed vs. expected speed between fixes); without usable movement data it falls back to a time-of-day congestion factor (rush hour ×0.55, daytime ×0.75, night ×0.95 — motorised modes only). `manual` applies **Speed Factor** directly. The applied factor is reported in the run warnings. |
-| **Speed Factor** | `speedFactor` | ×0.7 | Real speed = factor × profile speed; used when Speed Realism is *Manual* (clamped to 0.25–1.5). |
-| **Show PPA** | `showPPA` | on | Draw the potential path area surface. |
+All settings live in the **Prism Explorer panel**, which reveals them once both
+anchors are placed. They are grouped here exactly as the panel groups them.
 
-When OSM roads are auto-downloaded, posted speed limits (`maxspeed` tags) now
+::: tip The time budget is not a setting
+The budget `T` is read straight from the two anchors' timestamps
+(`T = t_B − t_A`). To change it, move an anchor or click a different GPS point —
+there's no slider for it. (If both anchors happen to share a time, a fallback
+**Time Budget** slider appears so you can set `T` by hand.)
+:::
+
+### Travel speed
+
+| Setting | Key | Default | Description |
+|---------|-----|---------|-------------|
+| **Travel Speed** | `speedMode` | Walking (5 km/h) | Maximum speed profile that sets the road graph's travel times: Walking 5 · Cycling 15 · Transit 30 · Driving 60 · **Custom**. |
+| **Custom Speed** | `customSpeed` | 5 km/h | Free travel speed in km/h (1–120). Shown only when **Travel Speed = Custom**. |
+| **Speed Realism** | `speedAdjustment` | Free-flow (`off`) | How the profile speed is scaled to real conditions. **Free-flow** uses the posted/class speeds as-is. **Auto** calibrates a personal speed factor from the loaded GPS trajectory (observed vs. expected speed between fixes); when movement data is unusable it falls back to a time-of-day congestion factor (rush hour ×0.55, daytime ×0.75, night ×0.95 — motorised modes only). **Manual** applies **Speed Factor** directly. The factor actually used is reported in the run warnings. |
+| **Speed Factor** | `speedFactor` | ×0.7 | Real speed = factor × profile speed (range 0.25–1.5; 0.55 ≈ urban rush hour). Shown only when **Speed Realism = Manual**. |
+
+When OSM roads are auto-downloaded, posted speed limits (`maxspeed` tags)
 override the class-default speeds wherever they are mapped, regardless of the
 Speed Realism setting.
 
-::: info Backend tunables
-The backend also accepts `timeSlices` (default 10) for how many vertical slices
-the 3D prism is stacked into, and `h3Resolution` (default: auto from the
-reachable extent) for the dwell surface's cell size.
+### Time budget & 3-D structure
+
+| Setting | Key | Default | Range | Description |
+|---------|-----|---------|-------|-------------|
+| **Min Activity Time** | `minActivityMinutes` | 5 min | 0–120 | Minimum activity time `A_min` the subject must be able to spend at a location for it to count as reachable: a road `x` is in the prism when `travel(A→x) + travel(x→B) + A_min ≤ T`. Larger values shrink the prism. |
+| **Time Slices** | `timeSlices` | 15 | 2–30 | Number of vertical levels the 3-D prism is stacked into between A and B; the flat 2-D dwell surface is their projection. More slices give smoother stepping in the animation and Focused 3D View but cost more to build. |
+
+### Road network
+
+The road graph is **auto-downloaded from OpenStreetMap** for the anchors'
+bounding extent at run time (and disk-cached for reuse), so there is no setting
+to pick a network. The extent is rejected if it is too large for an interactive
+run.
+
+::: info Backend tunables (not exposed in the panel)
+The backend also accepts `h3Resolution` (dwell-surface cell size; default: auto
+from the reachable extent). A minor-road filter and a per-result render cap may
+additionally thin the *drawn* roads — the dwell surface always aggregates the
+full reachable set regardless.
 :::
 
 ### Prism modes
