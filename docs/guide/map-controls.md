@@ -1,7 +1,7 @@
 # Map Controls & Pins
 
-The map is fully interactive. Controls live in the **top-left button stack**;
-the **legend** and **time player** sit along the bottom.
+The map is interactive in both 2D and 3D. Navigation controls sit in the
+top-left button stack. The legend and time player sit along the bottom.
 
 ## Navigation
 
@@ -16,18 +16,19 @@ the **legend** and **time player** sit along the bottom.
 
 ## Pin-point mode
 
-Pin-point mode lets you mark specific features on the map and anchor them to the
-ground — handy for annotating a point of interest while exploring a 3D result.
+Pin-point mode lets you mark a feature and connect it to the ground. This is
+useful when a result is tall in 3D and you want to see the feature's ground
+position.
 
 ### Drop a pin
 
-1. Click the **📍 pin** button in the control stack. It highlights green to show
+1. Click the **pin** button in the control stack. It highlights green to show
    the mode is active.
 2. Click a feature (a trajectory point, a cube cell, a prism vertex). A pin drops
    at the feature's elevation with a **stem down to the ground** and a contact
    dot, so you can read its ground position even in a tall 3D scene.
 
-Clicking empty basemap drops a pin at ground level.
+Clicking the empty basemap drops a pin at ground level.
 
 ### Remove pins
 
@@ -65,7 +66,7 @@ The legend (bottom-left) lists every active result layer. Use it to:
 ### What an export contains
 
 Exports are meant for further analysis in ArcGIS, QGIS, or Python
-(geopandas) — not for re-creating the 3D scene — so the file differs from
+(GeoPandas) — not for re-creating the 3D scene — so the file differs from
 what is drawn on the map:
 
 - **Geometry is flat 2D WGS84.** The map lifts vertices to a synthetic
@@ -88,5 +89,5 @@ and attribute schema — mixed collections do not convert cleanly to feature
 classes or GeoDataFrames.
 
 The full rename table lives in the
-[Tools overview](/tools/#exporting-results), and each tool page documents its
-exact per-output fields under **Exported data**.
+[Tools overview](/tools/#exporting-results), and each tool's algorithm page
+documents its exact per-output fields.

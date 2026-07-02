@@ -70,10 +70,26 @@ export default defineConfig({
           text: 'Tools',
           items: [
             { text: 'Overview', link: '/tools/' },
-            { text: '3D Trajectory', link: '/tools/trajectory-3d' },
-            { text: 'Space-Time Kernel Density', link: '/tools/stkde' },
-            { text: 'Space-Time Cube', link: '/tools/space-time-cube' },
-            { text: 'Space-Time Prism', link: '/tools/space-time-prism' },
+            {
+              text: '3D Trajectory',
+              link: '/tools/trajectory-3d',
+              items: [{ text: 'Algorithm', link: '/tools/trajectory-3d-algorithm' }],
+            },
+            {
+              text: 'Space-Time Kernel Density',
+              link: '/tools/stkde',
+              items: [{ text: 'Algorithm', link: '/tools/stkde-algorithm' }],
+            },
+            {
+              text: 'Space-Time Cube',
+              link: '/tools/space-time-cube',
+              items: [{ text: 'Algorithm', link: '/tools/space-time-cube-algorithm' }],
+            },
+            {
+              text: 'Space-Time Prism',
+              link: '/tools/space-time-prism',
+              items: [{ text: 'Algorithm', link: '/tools/space-time-prism-algorithm' }],
+            },
           ],
         },
       ],
